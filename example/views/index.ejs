@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+  <head>
+     <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simple-filer demo</title>
+    <link rel='stylesheet' href='/stylesheets/style.css' />
+	  <link href="/stylesheets/bootstrap.3.3.7.min.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+	    <div class="col-md-4">
+		    <div id="myID"></div>
+		    Choose a peer to send files to.
+		    <div id="peerListContainer">
+			    <div class="radio">
+				    <label>
+					    <input type="radio" name="peerList" id="optionsRadios1" value="option1">
+					    Option one
+				    </label>
+			    </div>
+			    <div class="radio">
+				    <label>
+					    <input type="radio" name="peerList" id="optionsRadios2" value="option2">
+					    Option two
+				    </label>
+			    </div>
+			    <div class="radio">
+				    <label>
+					    <input type="radio" name="peerList" id="optionsRadios3" value="option3">
+					    Option three
+				    </label>
+			    </div>
+		    </div>
+		    <div class="form-group">
+			    <label for="inputFile">Select files</label>
+			    <input type="file" id="inputFile">
+		    </div>
+		    <button id="startTransfer" type="button" class="btn btn-primary" name="startTransfer">Send</button>
+	    </div>
+
+	    <div class="col-md-8">
+		    <span>file sending/receiving stat</span>
+		    <table class="table">
+			    <caption>Optional table caption.</caption>
+			    <thead>
+			    <tr>
+				    <th>#</th>
+				    <th>First Name</th>
+				    <th>Last Name</th>
+				    <th>Username</th>
+			    </tr>
+			    </thead>
+			    <tbody>
+			    <tr>
+				    <th scope="row">1</th>
+				    <td>Mark</td>
+				    <td>Otto</td>
+				    <td>@mdo</td>
+			    </tr>
+			    <tr>
+				    <th scope="row">2</th>
+				    <td>Jacob</td>
+				    <td>Thornton</td>
+				    <td>@fat</td>
+			    </tr>
+			    <tr>
+				    <th scope="row">3</th>
+				    <td>Larry</td>
+				    <td>the Bird</td>
+				    <td>@twitter</td>
+			    </tr>
+			    </tbody>
+		    </table>
+
+	    </div>
+    </div>
+
+    <script src="/javascripts/jquery.1.12.4.min.js"></script>
+    <script src="/javascripts/bootstrap.3.3.7.min.js"></script>
+    <script src="/javascripts/bundle.js"></script>
+  </body>
+</html>
