@@ -9,8 +9,13 @@ Filer.prototype.peers = {};
 Filer.prototype.tasks = [];
 
 Filer.prototype._createPeerConnection = function (offerUID, answerUID, initiator, signalingChannel) { // todo 用obj作为参数，而非多个individual arguments
-  var p = this.peers[ initiator ? answerUID : offerUID ] = new Peer({initiator: initiator, trickle: true});
-  p._peerID = initiator ? answerUID : offerUID; // don't want to mess with channelName
+  var peerID = initiator ? answerUID : offerUID;
+  this.peers[ peerID ] = {
+    peerObj: new Peer({initiator: initiator, trickle: true}),
+    files: {} // key is fileID, value is obj containing file's binary data, other meta info
+  };
+  var p = this.peers[peerID].peerObj;
+  p._peerID = peerID; // don't want to mess with channelName
 
   p.on('signal', function (signalingData) {
     if (p.initiator) {
@@ -39,9 +44,11 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, initiator
   return p
 };
 
-Filer.prototype.handleSignaling = function(data){ // don't put p.on('data') handler inside this function
-  var p = this.peers[data.from]; // in trickle mode, this signalingHandler would be called many times
-  if (!p){ // I'm answerer(initiator == false)
+Filer.prototype.handleSignaling = function(data){
+  var p;
+  this.peers[data.from] && (p = this.peers[data.from].peerObj);
+
+  if (!p){ // I'm answerer(initiator == false), possible race condition: A and B try to establish connection to other side at the same time
     p = this._createPeerConnection(data.from, this.myID, false, this.signalingChannel);
   }
   p.signal(data.signalingData);
@@ -53,8 +60,10 @@ Filer.prototype.send = function(toWhom, fileObj){
 
   fileObj.id = randomString();
   this.tasks.push({file: fileObj, from: this.myID, to: toWhom, status: 'pending'}); // status: running/pending/done
-  var p = this.peers[toWhom];
-  if (p && p.connected){ // peer exists and connected
+  //var p = this.peers[toWhom];
+  var p;
+  this.peers[toWhom] && (p = this.peers[toWhom].peerObj);
+  if (p && p.connected){
     this._runTask();
   } else if (p){ // peer exists, but not connected, still connecting
     console.log('p exist, but not ready, just wait'); // doNothing, just wait
@@ -76,11 +85,11 @@ Filer.prototype._runTask = function(){
   if (t) {
     if (t.from == this.myID) { // I'm the file sender
       var fileInfo = {id: t.file.id, size: t.file.size, name: t.file.name, to: t.to};
-      this.peers[fileInfo.to].send( makeFileMeta(fileInfo) )
+      this.peers[fileInfo.to].peerObj.send( makeFileMeta(fileInfo) )
     } else if (t.to == this.myID){ // I'm the file receiver
       //this.peers[t.from].send("the file I want is: " + t.file.name + ' fileID: ' + t.file.id);
       //this._receiveFile()
-      console.log('receiving file now')
+      console.log('receiving file now'); // do nothing, wait for fileMeta
     } else {
       console.log('Oops')
     }
@@ -91,7 +100,7 @@ Filer.prototype._runTask = function(){
 //---------- data protocol -----------------
 // first byte is data type: 0(fileMeta), receiver need to save this info(fileID/Name/Size) in his/her tasks, then send back the fileChunkReq
 //                          1(fileChunkReq), receiver send the fileChunkReq(what chunk of which file that I need)
-//                          3(fileChunk), after receiving receiver's fileChunkReq, sender grab the chunk from the file, then send it out(need forloop to finish the whole chunk)
+//                          2(fileChunk), after receiving receiver's fileChunkReq, sender grab the chunk from the file, then send it out(need forloop to finish the whole chunk)
 
 
 function makeFileMeta(fileInfo){
@@ -124,7 +133,7 @@ function parseFileMeta(data){
 }
 
 function makeFileChunkReq(chunkInfo){ // |dataType = 1(8 bytes)|chunkIndex(8 bytes)|fileID(16bytes)|
-  console.log('chunkInfo before make if: ', chunkInfo);
+  console.log('chunkInfo before make it: ', chunkInfo);
   var buf = new ArrayBuffer(8 + 8 + 16);
   new Float64Array(buf, 0, 1)[0] = 1; // dataType = 1
   new Float64Array(buf, 8, 1)[0] = chunkInfo.chunkIdx; // chunkIdx
@@ -155,16 +164,16 @@ function parseFileChunk(){
 Filer.prototype._parseData = function(data){
   var dataType = new Float64Array(data.data.buffer, 0, 1)[0]; // 凡是data channel过来的数据, 需要parse, 一律读取该数据的 data.buffer
   switch (dataType){
-    case 0:
+    case 0: // fileMeta, receive get ready to receive(create memStore)
       var fileInfo = parseFileMeta(data.data);
       console.log('FileMeta, create memStore and get ready to receive'); // we have filename/size, show them on page, and create memStore
-      this.peers[data.peerID].send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
+      this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
       break;
-    case 1:
-      console.log('File chunk request, here you go, take it');
+    case 1: // fileChunkReq, receiver send the chunk requested(read from file obj)
       var chunkInfo = parseFileChunkReq(data.data);
+      console.log('File chunk request, chunkinfo: ', chunkInfo);
       break;
-    case 2:
+    case 2: // fileChunk, receiver save it into memStore, actually it's one piece of the fileChunk
       console.log('the file chunk msg I want, save it now');
       break;
     default:
