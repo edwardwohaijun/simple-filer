@@ -1,4 +1,3 @@
-//var Peer = require('simple-peer');
 var Filer = require('simple-filer');
 var filer = new Filer({}); // 必须页面一载入, 就new Filer(), 而不是点击发送按钮的一刻, new Filer(), 这样的话, 等于每发一个文件, 新建一个filer obj, 没有充分利用***
 var myID, selectedPeerID, users = {};
