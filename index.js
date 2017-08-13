@@ -1,16 +1,20 @@
 //var u = require('FileSystemAPI');
 //import {fs, fileExists, getFile, getFileWriter, removeFile} from './FileSystemAPI';
 const Peer = require('simple-peer');
-const msgPayloadSize = 64 * 1024 - 48; // msgSize: 64k, dataType: 8 bytes, chunkIdx: 8 bytes, msgIdx: 8 bytes, padding: 8 bytes, fileID: 16bytes
-const chunkSize = msgPayloadSize * 32;  // each chunk need to send 32 msgs. This is also the memStore size to store the current chunk
-//const msgCount = 32;  // chunkSize / msgPayloadSize; the max msgCount in a chunk
+const msgPayloadSize = 64 * 1024 - 48; // msgSize: 64k, dataType: 8 bytes, chunkIdx: 8 bytes, msgIdx: 8 bytes, padding: 8 bytes, fileID: 16bytes(8 characters)
+const chunkSize = msgPayloadSize * 32;  // each chunk need to send 32 msg in a loop. This is also the memStore/buffer size to store the current chunk
 
 module.exports = Filer;
 
-function Filer({myID, ws}){
+function Filer({myID, ws}){ // need more arguments: iceServer
   this.signalingChannel = ws || null;
   this.myID = myID || '';
 }
+
+Filer.prototype = new EventEmitter();
+//Filer.prototype = Object.create(EventEmitter.prototype); // this is not gonna work, because the EM's events obj is not initialised, you must use an instance of EM.
+Filer.prototype.constructor = Filer;
+
 Filer.prototype.peers = {};
 Filer.prototype.tasks = []; // used to show sending/receiving progress on page.
 
@@ -25,6 +29,8 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, initiator
   if (!this.peers[peerID].files){
     this.peers[peerID].files = {sending: {}, receiving:{}}
   }
+
+  console.log('after createPeerCon: ', this.peers[peerID]);
 
   var p = this.peers[peerID].peerObj;
   p._peerID = peerID; // don't want to mess with channelName
@@ -69,19 +75,23 @@ Filer.prototype.handleSignaling = function(data){
 Filer.prototype.send = function(toWhom, fileObj){
   if (!fileObj) throw Error("no file selected");
   if (!toWhom) throw Error("no peer selected");
-  var fileID = randomString(); // todo: I need a taskID(random string)
-  this.tasks.push(
-      {
-        fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
-        from: this.myID, to: toWhom, status: 'pending'
-      }
-  ); // status: running/pending/done
+  var fileID = randomString();
+  var newTask = {
+    fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
+    progress: 0, from: this.myID, to: toWhom, status: 'pending'
+  };
+  this.tasks.push(newTask);
+  // status: receiving/sending/pending/done/stopping, stopped. when a chunk is in transfer, you have to wait for it to finish, during which the status is stopping, after that, it's stopped
+
+  this.emit('newTask', newTask); // todo 既然有多个status, 就需要多个evt, 如: newStatus, value是该task的new status
 
   if (!this.peers[toWhom]){
-    this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}}, receiving:{}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
-  } else { // todo: 第二次点击 send 岂不是会把之前的 files 覆盖???????
-    this.peers[toWhom].files.sending[fileID] = fileObj; // 这样就不覆盖了
-    this.peers[toWhom].files.receiving = {}
+    this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}, receiving:{}}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
+  } else {
+    this.peers[toWhom].files.sending[fileID] = fileObj;
+    if (!this.peers[toWhom].files.receiving){ // is this redundant ?
+      this.peers[toWhom].files.receiving = {};
+    }
   }
 
   var p = this.peers[toWhom].peerObj;
@@ -118,6 +128,10 @@ Filer.prototype._runTask = function(){
   }
 };
 
+Filer.prototype.removeTask = function(fildID){ // fileID
+  // beware the file in transit, do I need to notify the peer. 传输一半的文件需要remove, filesystem中也需要remove, 但可能文件名重名的原因, 导致发送方的filename, 和接受方的filename不一致, FS中remove时需要足以
+  // 点击clear时, 页面的status提示: stopping(即: 除了 pending, sending, reveiving, 还有个stopping), 待当前chunk发送结束, 再clear
+};
 ////////////////////////////////////////////
 //---------- data protocol -----------------
 // first byte is data type: 0(fileMeta), receiver need to save this info(fileID/Name/Size) in his/her tasks, then send back the fileChunkReq
@@ -227,11 +241,8 @@ Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
   console.log('fileOBJ: ', this.peers[peerID].files);
   console.log('sending chunk: fileID/chunkIdx/peerID/fileObj', fileID, '/', chunkIdx, '/', peerID, '/', fileObj);
 
-  var dataTypeBuf = new Float64Array(1);
-  dataTypeBuf[0] = 2;
-
-  var chunkIdxBuf = new Float64Array(1);
-  chunkIdxBuf[0] = chunkIdx;
+  //var dataTypeBuf = new Float64Array(1); dataTypeBuf[0] = 2;
+  //var chunkIdxBuf = new Float64Array(1); chunkIdxBuf[0] = chunkIdx;
 
   var p = this.peers[peerID].peerObj;
   var slice = fileObj.slice(chunkSize * chunkIdx , chunkSize * (1 + chunkIdx)); // slice(startingByte, endingByte)
@@ -240,7 +251,6 @@ Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
   reader.onload = function(evt) {
     var bufferSizeBuf = new Float64Array(1);
     bufferSizeBuf[0] = evt.target.result.byteLength;
-
 
     //var makeBufferReq = new ArrayBuffer(32);
     //new Float64Array(makeBufferReq, 0, 1)[0] = 2; // dataType
@@ -254,7 +264,7 @@ Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
     var fileChunkMeta = new ArrayBuffer(48);
     new Float64Array(fileChunkMeta, 0, 1)[0] = 3; // dataType
     new Float64Array(fileChunkMeta, 8, 1)[0] = chunkIdx;
-    fileIdBuf = new Uint16Array(fileChunkMeta, 32, 8); // fileID(8 character, 16 bytes)
+    var fileIdBuf = new Uint16Array(fileChunkMeta, 32, 8); // fileID(8 character, 16 bytes)
     for(let i=0; i<fileIdBuf.length; i++){
       fileIdBuf[i] = fileID.charCodeAt(i)
     }
@@ -265,9 +275,7 @@ Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
     for (var i=0; i<msgCount; i++){
       new Float64Array(fileChunkMeta, 16, 1)[0] = i;
       data = memStore.slice(i * msgPayloadSize, (i+1) * msgPayloadSize);
-      console.log('data: ', data);
       msg = new Uint8Array(48 + data.byteLength);
-      console.log('fileChunkMeta: ', fileChunkMeta);
       msg.set(new Uint8Array(fileChunkMeta));
       msg.set(data, 48);
       console.log('msg to be sent: ', msg);
@@ -320,19 +328,25 @@ Filer.prototype._parseData = function(data){
       if (!this.peers[data.peerID].files.receiving[ fileInfo.id ]){
         this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create buffer for incoming file chunk data
       }
-
-      this.tasks.push({
+      var newTask = {
         fileID: fileInfo.id, fileName: fileInfo.name.substr(0, fileInfo.nameLength),
         fileSize: fileInfo.size, fileType: fileInfo.type.substr(0, fileInfo.typeLength),
-        from: data.peerID, to: this.myID
-      }); // todo: push to tasks, trigger an event, let client to add it on the page.
+        progress: 0, from: data.peerID, to: this.myID, status: 'pending'
+      };
+      this.tasks.push(newTask);
+      this.emit('newTask', newTask);
+
       this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
+      // todo: newStatus: receiving
       break;
+
     case 1: // fileChunkReq, receiver send the chunk requested(read from disk into memStore first)
       var chunkInfo = parseFileChunkReq(data.data);
       console.log('before calling _sendChunk, chunkInfo: ', chunkInfo);
       this._sendChunk({fileID: chunkInfo.id, chunkIdx: chunkInfo.chunkIdx, peerID: data.peerID});
+      // todo: newStatus: sending, need to check if the chunkIdx is 0
       break;
+
     case 2: // makeBufferReq, receiver make a buffer(of specified size) for the incoming chunk data
       var bufferSizeInfo = parseMakeBufferSizeReq(data);
       var currentBuffer = this.peers[data.peerID].files.receiving[ bufferSizeInfo.fileID ];
@@ -341,10 +355,12 @@ Filer.prototype._parseData = function(data){
       } // if buffer doesn't exist OR exist but its byteLength not equal to the new buffer size, create it
       // only the last chunk's bufferSize might not equal to current buffer size
       break;
+
     case 3: // fileChunk data, receiver save it into file buffer, actually it's one piece of the fileChunk
       console.log('fileChunk data coming, save it into file Buffer');
       this._saveChunk(data);
       break;
+
     default:
       console.log('Oops, unknown data type: ', dataType)
   }
@@ -378,11 +394,10 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk) => {
     if (!isLastChunk){
       peer.send(makeFileChunkReq({chunkIdx: chunkIdx + 1, id: fileObj.fileID}));
     }
-    //peer.send('ta da'); // 一个block写完, 发一条msg给发送方, 你可以发下个block的数据了.
   }; // 即使写入失败, onwriteend也会触发, 但此刻seek value就不对了, 繁啊.
 };
 
-// filesystem API
+// ------------------------- filesystem API
 window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 // https://www.toptal.com/javascript/javascript-promises
 const fs = fileObj => { // 我感觉还需要传输 snackbarHandler, socket, 便于: 出错时候, 告知本人, 对方. 出错后, fileObj的诸多property都要设为null.
@@ -441,6 +456,51 @@ const removeFile =  ({fileEntry}) => { // 必须 fs(fileObj).then(getFile).then(
   })
 };
 
+// EventEmitter  ------------------------------------
+// credit: https://gist.github.com/mudge/5830382
+function EventEmitter(){
+  this.events = {};
+}
+
+EventEmitter.prototype.on = function (event, listener) {
+  if (typeof this.events[event] !== 'object') {
+    this.events[event] = [];
+  }
+
+  this.events[event].push(listener);
+};
+
+EventEmitter.prototype.removeListener = function (event, listener) {
+  var idx;
+  if (typeof this.events[event] === 'object') {
+    idx = this.events[event].indexOf(listener);
+    if (idx > -1) {
+      this.events[event].splice(idx, 1);
+    }
+  }
+};
+
+EventEmitter.prototype.emit = function (event) {
+  var i, listeners, length, args = [].slice.call(arguments, 1);
+
+  if (typeof this.events[event] === 'object') {
+    listeners = this.events[event].slice();
+    length = listeners.length;
+
+    for (i = 0; i < length; i++) {
+      listeners[i].apply(this, args);
+    }
+  }
+};
+
+EventEmitter.prototype.once = function (event, listener) {
+  this.on(event, function g () {
+    this.removeListener(event, g);
+    listener.apply(this, arguments);
+  });
+};
+
+///////////////
 // 而且是否会发生: sender发送metaFile, 同时receiver发送 data fetch req, 同一个file只需一方发送即可???
 // credit: https://stackoverflow.com/questions/10726909/random-alpha-numeric-string-in-javascript
 function randomString(length, chars) { // todo: FileSystemAPI 中也有用到, factor out
