@@ -5,9 +5,14 @@ filer.on('newTask', function(task) {
   addTask(task);
 });
 
+filer.on('newProgress', function({fileID, progress}){
+  var progressTD = $("#progress-" + fileID);
+  progressTD.text(Math.floor(progress * 100) + '%');
+});
+
 var myID, selectedPeerID, users = {};
-var ws = new WebSocket('wss://192.168.0.199:8443'); // 不能写成这样啊， 用localhost吧
-// ws作为参数传给filer的ctor时候， check一下是否 wss， 因为不支持ws
+var ws = new WebSocket('wss://192.168.0.199:8443'); // todo 不能写成这样啊， 用localhost吧
+// ws作为参数传给filer的ctor时候，check一下是否 wss， 因为不支持ws
 var file; // tile to be sent
 
 $("#startTransfer").click(function(){ // if no peer selected, disable this button.
@@ -31,7 +36,7 @@ $("#inputFile").change(function(e){
 function addTask(task){
   var tbody = $('#taskList').find('tbody');
   var fileName = "<td>" + task.fileName + "</td>";
-  var progress = "<td>" + (Math.floor(task.progress * 100)) + "%</td>";
+  var progress = "<td id='progress-" + task.fileID + "'>" + (Math.floor(task.progress * 100)) + "%</td>";
   var fileSize = "<td>" + GetFileSize(task.fileSize) + "</td>";
   var fileFrom = myID == task.from ? 'me' : task.from;
   fileFrom = "<td>" + fileFrom + "</td>";
@@ -113,5 +118,3 @@ function GetFileSize(bytes, si) {
     } while(Math.abs(bytes) >= thresh && u < units.length - 1);
     return bytes.toFixed(1)+' '+units[u];
 }
-///////////////////
-
