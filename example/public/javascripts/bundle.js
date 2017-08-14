@@ -55,10 +55,28 @@
 	
 	filer.on('newProgress', function (_ref) {
 	  var fileID = _ref.fileID,
-	      progress = _ref.progress;
+	      progress = _ref.progress,
+	      fileName = _ref.fileName,
+	      fileURL = _ref.fileURL;
 	
 	  var progressTD = $("#progress-" + fileID);
 	  progressTD.text(Math.floor(progress * 100) + '%');
+	  if (progress === 1 && fileURL) {
+	    var fileNameTD = $("#fileName-" + fileID);
+	    fileNameTD.html("<a href='" + fileURL + "' download>" + fileName + "</a>");
+	  }
+	});
+	
+	// <a href={href} download>{filename}</a>
+	
+	
+	//     this.emit('newStatus', {fileID: chunk.fileID, status: 'receiving'});
+	filer.on('newStatus', function (_ref2) {
+	  var fileID = _ref2.fileID,
+	      status = _ref2.status;
+	
+	  var statusTD = $("#status-" + fileID);
+	  statusTD.text(status);
 	});
 	
 	var myID,
@@ -89,14 +107,14 @@
 	
 	function addTask(task) {
 	  var tbody = $('#taskList').find('tbody');
-	  var fileName = "<td>" + task.fileName + "</td>";
+	  var fileName = "<td id='fileName-" + task.fileID + "'>" + task.fileName + "</td>";
 	  var progress = "<td id='progress-" + task.fileID + "'>" + Math.floor(task.progress * 100) + "%</td>";
 	  var fileSize = "<td>" + GetFileSize(task.fileSize) + "</td>";
 	  var fileFrom = myID == task.from ? 'me' : task.from;
 	  fileFrom = "<td>" + fileFrom + "</td>";
 	  var fileTo = myID == task.to ? 'me' : task.to;
 	  fileTo = "<td>" + fileTo + "</td>";
-	  var fileStatus = "<td>" + task.status + "</td>";
+	  var fileStatus = "<td id='status-" + task.fileID + "'>" + task.status + "</td>";
 	  var fileButton = "<td><button type='button' class='btn btn-primary'>clear</button></td>";
 	  tbody.append($("<tr>" + fileName + progress + fileSize + fileFrom + fileTo + fileStatus + fileButton + "</tr>"));
 	}
@@ -259,7 +277,7 @@
 	  this.tasks.push(newTask);
 	  // status: receiving/sending/pending/done/stopping, stopped. when a chunk is in transfer, you have to wait for it to finish, during which the status is stopping, after that, it's stopped
 	
-	  this.emit('newTask', newTask); // todo 既然有多个status, 就需要多个evt, 如: newStatus, value是该task的new status
+	  this.emit('newTask', newTask);
 	
 	  if (!this.peers[toWhom]){
 	    this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}, receiving:{}}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
@@ -485,8 +503,14 @@
 	  return fileStat
 	};
 	
-	Filer.prototype._updateProgress = function({fileID, progress}){
-	  this.emit('newProgress', {fileID, progress});
+	Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}){
+	
+	  if (progress === 1){
+	    this.emit('newProgress', {fileID, progress, fileName, fileURL});
+	    this.emit('newStatus', {fileID: fileID, status: 'done'});
+	  } else {
+	    this.emit('newProgress', {fileID, progress});
+	  }
 	  for (let i = 0; i < this.tasks.length; i++){
 	    if (this.tasks[i].fileID === fileID){
 	      this.tasks[i].progress = progress;
@@ -497,7 +521,7 @@
 	
 	Filer.prototype._saveChunk = function(data) {
 	  var chunk = parseFileChunk(data.data);
-	  if (chunk.chunkIdx == 0){
+	  if (chunk.chunkIdx === 0){
 	    this.emit('newStatus', {fileID: chunk.fileID, status: 'receiving'});
 	  }
 	
@@ -580,13 +604,28 @@
 	  }
 	};
 	
+	/*
+	var fsURL = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
+	    var port = window.location.port ? ':' + window.location.port : '';
+	    fsURL += port + '/temporary';
+	    for (let fID in this.state.p){
+	      var fileObj = this.state.p[fID];
+	      var filename = fileObj.filename;
+	      if (fileObj.receiving){
+	        var href = `${fsURL}/${filename}`;
+	        filename = <a href={href} download>{filename}</a>
+	      }
+	  */
 	const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
 	  writer.seek( chunkIdx * chunkSize);
 	  writer.onerror = e => {console.log('Write failed: ' + e.toString()); }; // 需要一个独立的Writer err handler, 任何地方, 包含promise chain出错, 调用该err handler, 其内:
 	  writer.write(new Blob([data], {type: fileObj.fileType}));  // err handler中需要snakcbar, peer, 通过peer发送给对方msg, 告知: 放弃写入, 因为我这里出错了. // reset fileObj.....
 	  writer.onwriteend = e => {
 	    if (isLastChunk){
-	      updateProgress({fileID: fileObj.fileID, progress: 1});
+	      var url = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
+	      var port = window.location.port ? ':' + window.location.port : '';
+	      url += port + '/temporary/' + fileObj.fileName;
+	      updateProgress({fileID: fileObj.fileID, progress: 1, fileName: fileObj.fileName, fileURL: url});
 	      peer.send(makeReceivedNotice(fileObj.fileID));
 	    } else {
 	      updateProgress({fileID: fileObj.fileID, progress: (chunkIdx + 1) * chunkSize / fileObj.fileSize});

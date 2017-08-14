@@ -5,9 +5,18 @@ filer.on('newTask', function(task) {
   addTask(task);
 });
 
-filer.on('newProgress', function({fileID, progress}){
+filer.on('newProgress', function({fileID, progress, fileName, fileURL}){
   var progressTD = $("#progress-" + fileID);
   progressTD.text(Math.floor(progress * 100) + '%');
+  if (progress === 1 && fileURL){
+    var fileNameTD = $("#fileName-" + fileID);
+    fileNameTD.html("<a href='" + fileURL + "' download>" + fileName + "</a>")
+  }
+});
+
+filer.on('newStatus', function({fileID, status}){
+  var statusTD = $("#status-" + fileID);
+  statusTD.text(status);
 });
 
 var myID, selectedPeerID, users = {};
@@ -35,14 +44,14 @@ $("#inputFile").change(function(e){
 
 function addTask(task){
   var tbody = $('#taskList').find('tbody');
-  var fileName = "<td>" + task.fileName + "</td>";
+  var fileName = "<td id='fileName-" + task.fileID + "'>" + task.fileName + "</td>";
   var progress = "<td id='progress-" + task.fileID + "'>" + (Math.floor(task.progress * 100)) + "%</td>";
   var fileSize = "<td>" + GetFileSize(task.fileSize) + "</td>";
   var fileFrom = myID == task.from ? 'me' : task.from;
   fileFrom = "<td>" + fileFrom + "</td>";
   var fileTo = myID == task.to ? 'me' : task.to;
   fileTo = "<td>" + fileTo + "</td>";
-  var fileStatus = "<td>" + task.status + "</td>";
+  var fileStatus = "<td id='status-" + task.fileID + "'>" + task.status + "</td>";
   var fileButton = "<td><button type='button' class='btn btn-primary'>clear</button></td>";
   tbody.append($("<tr>" + fileName + progress + fileSize + fileFrom + fileTo + fileStatus + fileButton + "</tr>"))
 }

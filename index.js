@@ -83,7 +83,7 @@ Filer.prototype.send = function(toWhom, fileObj){
   this.tasks.push(newTask);
   // status: receiving/sending/pending/done/stopping, stopped. when a chunk is in transfer, you have to wait for it to finish, during which the status is stopping, after that, it's stopped
 
-  this.emit('newTask', newTask); // todo 既然有多个status, 就需要多个evt, 如: newStatus, value是该task的new status
+  this.emit('newTask', newTask);
 
   if (!this.peers[toWhom]){
     this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}, receiving:{}}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
@@ -181,7 +181,6 @@ function parseFileMeta(data){
   fileInfo.typeLength = new Float64Array(data.buffer, 176, 1)[0];
   fileInfo.type = String.fromCharCode.apply(null, new Uint16Array(data.buffer, 192));
 
-  console.log('after parsing fileMeta: ', fileInfo);
   return fileInfo;
 }
 
@@ -201,23 +200,8 @@ function parseFileChunkReq(data){
   var chunkInfo = {};
   chunkInfo.chunkIdx = new Float64Array(data.buffer, 8, 1)[0];
   chunkInfo.id = String.fromCharCode.apply(null, new Uint16Array(data.buffer, 16, 8));
-  console.log('chunkInfo after parsing: ', chunkInfo);
   return chunkInfo;
 }
-
-/*
-function makeFileChunk(chunkData){ // |dataType = 3(8 bytes)|chunkIdx(8 bytes)|
-  var buf = new ArrayBuffer(64 * 1024); // fully utilise max allowed msg size
-  new Float64Array(buf, 0, 1)[0] = 3; // dataType = 3
-  new Float64Array(buf, 8, 1)[0] = chunkData.chunkIdx; // chunkIdx
-
-  var fileID = new Uint16Array(buf,16, 8); // fileID(8 character, 16 bytes)
-  for(let i=0; i<fileID.length; i++){
-    fileID[i] = chunkData.fileID.charCodeAt(i)
-  }
-  new Uint8Array(buf, 8 + 8 + 16)
-}
-*/
 
 // makeFileChunk() function is built into _sendChunk()
 function parseFileChunk(data){
@@ -226,18 +210,8 @@ function parseFileChunk(data){
   chunk.fileID = String.fromCharCode.apply(null, new Uint16Array(data.buffer, 32, 8));
   chunk.msgIdx = new Float64Array(data.buffer, 16, 1)[0];
   chunk.data = new Uint8Array(data.buffer, 48);
-  console.log('after parsing fileChunkMeta: ', chunk);
   return chunk;
 }
-
-/*
-function parseMakeBufferSizeReq(data){
-  var makeBufferReq = {};
-  makeBufferReq.bufferSize = new Float64Array(data.data.buffer, 8, 1)[0];
-  makeBufferReq.fileID = String.fromCharCode.apply(null, new Uint16Array(data.data.buffer, 16, 8));
-  return makeBufferReq;
-}
-*/
 
 function makeReceivedNotice(fileID){ // notify sender I have received the file successfully. 4
   var buf = new ArrayBuffer(32); //
@@ -309,8 +283,14 @@ Filer.prototype._getFileStat = function(fileID){
   return fileStat
 };
 
-Filer.prototype._updateProgress = function({fileID, progress}){
-  this.emit('newProgress', {fileID, progress});
+Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}){
+
+  if (progress === 1){
+    this.emit('newProgress', {fileID, progress, fileName, fileURL});
+    this.emit('newStatus', {fileID: fileID, status: 'done'});
+  } else {
+    this.emit('newProgress', {fileID, progress});
+  }
   for (let i = 0; i < this.tasks.length; i++){
     if (this.tasks[i].fileID === fileID){
       this.tasks[i].progress = progress;
@@ -321,7 +301,7 @@ Filer.prototype._updateProgress = function({fileID, progress}){
 
 Filer.prototype._saveChunk = function(data) {
   var chunk = parseFileChunk(data.data);
-  if (chunk.chunkIdx == 0){
+  if (chunk.chunkIdx === 0){
     this.emit('newStatus', {fileID: chunk.fileID, status: 'receiving'});
   }
 
@@ -404,13 +384,28 @@ const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) =
   }
 };
 
+/*
+var fsURL = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
+    var port = window.location.port ? ':' + window.location.port : '';
+    fsURL += port + '/temporary';
+    for (let fID in this.state.p){
+      var fileObj = this.state.p[fID];
+      var filename = fileObj.filename;
+      if (fileObj.receiving){
+        var href = `${fsURL}/${filename}`;
+        filename = <a href={href} download>{filename}</a>
+      }
+  */
 const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
   writer.seek( chunkIdx * chunkSize);
   writer.onerror = e => {console.log('Write failed: ' + e.toString()); }; // 需要一个独立的Writer err handler, 任何地方, 包含promise chain出错, 调用该err handler, 其内:
   writer.write(new Blob([data], {type: fileObj.fileType}));  // err handler中需要snakcbar, peer, 通过peer发送给对方msg, 告知: 放弃写入, 因为我这里出错了. // reset fileObj.....
   writer.onwriteend = e => {
     if (isLastChunk){
-      updateProgress({fileID: fileObj.fileID, progress: 1});
+      var url = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
+      var port = window.location.port ? ':' + window.location.port : '';
+      url += port + '/temporary/' + fileObj.fileName;
+      updateProgress({fileID: fileObj.fileID, progress: 1, fileName: fileObj.fileName, fileURL: url});
       peer.send(makeReceivedNotice(fileObj.fileID));
     } else {
       updateProgress({fileID: fileObj.fileID, progress: (chunkIdx + 1) * chunkSize / fileObj.fileSize});
