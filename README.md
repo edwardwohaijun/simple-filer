@@ -15,6 +15,11 @@ This library allows you to send files(even bigger than your memory allowed) betw
 
 * [Simple-peer](https://github.com/feross/simple-peer) - Simple WebRTC video/voice and data channels.
 
+## Caveats
+Although you can send many files to many peers(or the same peer) at the same time, it's recommended against that. JavaScript is not very efficient at handling binary data.
+
+FileSystem API quota
+
 ## License
 
 This project is licensed under the [MIT License](/LICENSE.md).
