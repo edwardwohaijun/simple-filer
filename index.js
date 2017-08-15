@@ -173,6 +173,8 @@ first 8 bytes is data type, just an integer from 0 to 4, 1 byte is enough, but f
 4(receivedNotice), file receiver send this msg to file sender, notifying that the file has been successfully saved in chrome fileSystem
 fileID consumes 16bytes(8 random characters), fileIdx consumes 8bytes(just an integer),
 */
+
+// ------------------- data maker and parser
 function makeFileMeta(fileInfo){
   // |dataType = 0(8bytes) | fileSize(8bytes) | fileID(8 chars, 16bytes) | fileNameLength(8 bytes) | 8 bytes padding | fileName | fileTypeLength(8bytes) | 8 byte padding | fileType(mime type |
   var buf = new ArrayBuffer( 8 + 8 + 16 + 8 + 8 + 128 + 8 + 8 + 128);
@@ -277,38 +279,53 @@ function parseReceivedNotice(data){ // this is technically the same as parseRemo
   return String.fromCharCode.apply(null, new Uint16Array(data.buffer, 16, 8));
 }
 
-Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
-  var p = this.peers[peerID].peerObj;
-  var fileStat = this._getFileStat(fileID);
-  if (!fileStat){ // file receiver still has fileID, but file sender doesn't, that means file sender has actively removed the file
-    return
+// ------------------- data processing methods
+Filer.prototype._processFileMeta = function(data){
+  var fileInfo = parseFileMeta(data.data);
+  if (!this.peers[data.peerID].files.receiving[ fileInfo.id ]){
+    this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create local buffer for incoming file chunk data
+  }
+  var newTask = {
+    fileID: fileInfo.id, fileName: fileInfo.name.substr(0, fileInfo.nameLength),
+    fileSize: fileInfo.size, fileType: fileInfo.type.substr(0, fileInfo.typeLength),
+    progress: 0, from: data.peerID, to: this.myID, status: 'pending'
+  };
+  this.tasks.push(newTask);
+  this.emit('newTask', newTask);
+  this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
+};
+
+Filer.prototype._sendChunk = function(data){
+  var chunkInfo = parseFileChunkReq(data.data);
+  var fileStat = this._getFileStat(chunkInfo.id);
+  if (!fileStat) return; // file receiver still has fileID, but file sender doesn't, that means file sender has actively removed the file
+
+  if (chunkInfo.chunkIdx === 0){
+    this._updateStatus({fileID: chunkInfo.id, status: 'sending'})
+  } else { // when the next fileChunkReq comes, I know the previous chunk has been saved
+    this._updateProgress({fileID: chunkInfo.id, progress: chunkSize * chunkInfo.chunkIdx / fileStat.fileSize});
   }
 
-  if (chunkIdx === 0){
-    this._updateStatus({fileID: fileID, status: 'sending'})
-  }
-
-  const fileObj = this.peers[peerID].files.sending[fileID];
-  var slice = fileObj.slice(chunkSize * chunkIdx , chunkSize * (1 + chunkIdx)); // slice(startingByte, excludingEndingByte)
+  var p = this.peers[data.peerID].peerObj;
+  const fileObj = this.peers[data.peerID].files.sending[chunkInfo.id];
+  var slice = fileObj.slice(chunkSize * chunkInfo.chunkIdx , chunkSize * (1 + chunkInfo.chunkIdx)); // slice(startingByte, excludingEndingByte)
   var reader = new window.FileReader();
   reader.readAsArrayBuffer(slice);
   reader.onload = function(evt) {
-    var bufferSizeBuf = new Float64Array(1);
-    bufferSizeBuf[0] = evt.target.result.byteLength;
     var fileChunkMeta = new ArrayBuffer(48);
     new Float64Array(fileChunkMeta, 0, 1)[0] = 3; // dataType
-    new Float64Array(fileChunkMeta, 8, 1)[0] = chunkIdx;
+    new Float64Array(fileChunkMeta, 8, 1)[0] = chunkInfo.chunkIdx;
     var fileIdBuf = new Uint16Array(fileChunkMeta, 32, 8); // fileID(8 character, 16 bytes)
     for(let i=0; i<fileIdBuf.length; i++){
-      fileIdBuf[i] = fileID.charCodeAt(i)
+      fileIdBuf[i] = chunkInfo.id.charCodeAt(i)
     }
 
-    var memStore = new Uint8Array(evt.target.result);
-    const msgCount = Math.ceil( memStore.byteLength / msgPayloadSize );
+    var localBuffer = new Uint8Array(evt.target.result);
+    const msgCount = Math.ceil( localBuffer.byteLength / msgPayloadSize );
     var msg, data;
     for (let i=0; i<msgCount; i++){
       new Float64Array(fileChunkMeta, 16, 1)[0] = i;
-      data = memStore.slice(i * msgPayloadSize, (i+1) * msgPayloadSize);
+      data = localBuffer.slice(i * msgPayloadSize, (i+1) * msgPayloadSize);
       msg = new Uint8Array(48 + data.byteLength);
       msg.set(new Uint8Array(fileChunkMeta));
       msg.set(data, 48);
@@ -383,35 +400,16 @@ Filer.prototype._saveChunk = function(data) { // actually, it should be named _s
 Filer.prototype._parseData = function(data){
   var fileID, dataType = new Float64Array(data.data.buffer, 0, 1)[0]; // it's the data.buffer need to be parsed, not data
   switch (dataType){
-    case 0: // fileMeta: filename, size, id, type
-      var fileInfo = parseFileMeta(data.data); // todo: case 0 也像其他case一样,放在函数中单独处理.
-      if (!this.peers[data.peerID].files.receiving[ fileInfo.id ]){
-        this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create buffer for incoming file chunk data
-      }
-      var newTask = {
-        fileID: fileInfo.id, fileName: fileInfo.name.substr(0, fileInfo.nameLength),
-        fileSize: fileInfo.size, fileType: fileInfo.type.substr(0, fileInfo.typeLength),
-        progress: 0, from: data.peerID, to: this.myID, status: 'pending'
-      };
-      this.tasks.push(newTask);
-      this.emit('newTask', newTask);
-      this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
+    case 0: // fileMeta(filename, size, id, type), msg receiver(also the file receiver) need this info to prepare for the incoming chunk
+      this._processFileMeta(data);
       break;
 
-    case 1: // fileChunkReq, receiver send the chunk requested(read from disk into memStore first)
-      var chunkInfo = parseFileChunkReq(data.data);
-      var fileStat = this._getFileStat(chunkInfo.id); // todo: case 3 是不fileStat是否存在, 放在 saveChunk中判断, 而本例case1最好也放在 sendChunk中判断, 否则显得太罗嗦. updateProgress 也放在 sendChunk中
-      if (!fileStat) return; // undefined fileStat means user has removed this file(and cancel the whole file transfer operation)
-
-      if (chunkInfo.chunkIdx > 0){ // when the next fileChunkReq comes, I know the previous chunk has been sent
-        this._updateProgress({fileID: chunkInfo.id, progress: chunkSize * chunkInfo.chunkIdx / fileStat.fileSize});
-      }
-      this._sendChunk({fileID: chunkInfo.id, chunkIdx: chunkInfo.chunkIdx, peerID: data.peerID});
+    case 1: // fileChunkReq, msg receiver send the chunk requested(read from disk into localBuffer first)
+      this._sendChunk(data);
       break;
 
     case 2: // file remove request, whenever sender/receiver received this req, stop sending/receiving the next chunk, and remove all accompanying data
       fileID = parseRemoveReq(data.data);
-      console.log('fileRemoveReq received: ', fileID);
       this.removeTask(fileID);
       break;
 
@@ -432,6 +430,7 @@ Filer.prototype._parseData = function(data){
   }
 };
 
+// ------------------- chrome Filesystem writing utilities
 const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) => {
   if (fileObj.fileWriter) { // todo, when the whole file is done writing, remove this fileWriter on fileObj(in tasks)
     doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
@@ -464,7 +463,7 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updatePro
   }; // even if error occurred during write(), onwriteend still got fired, causing the wrong seek value
 };
 
-// ------------------------- filesystem API
+// ------------------------- chrome filesystem API(promise wrapper)
 window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 
 const fs = fileObj => {
@@ -479,18 +478,18 @@ const fs = fileObj => {
 
 const fileExists = ({root, fileObj}) => {
   return new Promise(function(resolve, reject) {
-    root.getFile(fileObj.fileName, {create: false}, // 并非真的要获取fileEntry, 而是判断是否该文件存在, 故: 必须用: create: false
-            fileEntry => { // 创建文件是在下一步: getFile中, 在那里, 有: create: true
+    root.getFile(fileObj.fileName, {create: false}, // the point is not to get the fileEntry, but check whether the file with fileName already exists, thus use "create: false"
+            fileEntry => {
               var filename = fileObj.fileName.substring(0, fileObj.fileName.lastIndexOf('.'));
               var ext = fileObj.fileName.substring(fileObj.fileName.lastIndexOf('.'));
-              var randomStr = randomString(); // 待写入的文件名有重复, 则: 文件名后加 _randomStr + file extension
-              fileObj.fileName = filename + '_' + randomStr + ext;
+              var randomStr = randomString(); // if the file with fileName already exists, append the new filename with _randomStr ...
+              fileObj.fileName = filename + '_' + randomStr + ext; // ... and file extension
               resolve({root:root, fileObj: fileObj});
             },
-            err => { // 本promise的目的就在于: 判断待写入文件是否存在, 如果存在, 说明待写入文件需要换个文件名, 上面的handler中已经做此处理了.
-              // 如果文件名不存在, 则: 可以直接写入, 此时对于我的case而言, 这个不算是err, 故: 还是执行resolve()
-              //console.log(err.name); // chrome 54 用的err.name是 NotFoundError. 之前的版本用的是: NOT_FOUND_ERR,
-              if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // 但可能执行getFile的时候出其他类型的错, 即: 非 NOT_FOUND_ERR, 此时才是真正的错, 执行reject, 让整个chain最后的err handler去处理.
+            err => { // NOT_FOUND_ERR(or NotFoundError) occurred when the file with fileName doesn't exist...
+              // ..., but in my case, this is not an error, so I call resolve(), only other type of errors need to call reject(err)
+              //console.log(err.name);
+              if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // chrome 54's err.name is NotFoundError, prior version use: NOT_FOUND_ERR
                 resolve({root:root, fileObj: fileObj});
               } else reject(err)
             }
@@ -498,7 +497,7 @@ const fileExists = ({root, fileObj}) => {
   })
 };
 
-const getFile = ({root, fileObj}) => {
+const getFile = ({root, fileObj}) => { // create the file and return its fileEntry obj
   return new Promise(function(resolve, reject){
     root.getFile(fileObj.fileName, {create:true}, fileEntry => {
       resolve({fileEntry: fileEntry, fileObj: fileObj});
@@ -515,7 +514,7 @@ const getFileWriter = ({fileEntry, fileObj}) => {
   })
 };
 
-const removeFile =  ({fileEntry}) => { // fs(fileObj).then(getFile).then(removeFile), fileObj must at least has a fileName property
+const removeFile =  ({fileEntry}) => { // fs(fileObj).then(getFile).then(removeFile), fileObj must have a fileName property
   return new Promise(function(resolve, reject){
     fileEntry.remove(()=>{
       resolve('success')
@@ -523,7 +522,7 @@ const removeFile =  ({fileEntry}) => { // fs(fileObj).then(getFile).then(removeF
   })
 };
 
-// EventEmitter, credit: https://gist.github.com/mudge/5830382
+// ------------------- EventEmitter, credit: https://gist.github.com/mudge/5830382
 function EventEmitter(){
   this.events = {};
 }
