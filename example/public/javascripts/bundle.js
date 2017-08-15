@@ -47,7 +47,8 @@
 	'use strict';
 	
 	var Filer = __webpack_require__(1);
-	var filer = new Filer({}); // 必须页面一载入, 就new Filer(), 而不是点击发送按钮的一刻, new Filer(), 这样的话, 等于每发一个文件, 新建一个filer obj, 没有充分利用***
+	var filer = new Filer({ webrtcConfig: { iceServers: [{ url: 'stun:104.236.162.81:3478' }, { url: 'turns:stun.worksphere.cn:443', username: 'worksphere', credential: 'TurnMeOn99' // 是否需要指定 ?transport=tcp/udp, 文件传输需要tcp, 视频需要udp
+	    }] } });
 	
 	filer.on('newTask', function (task) {
 	  addTask(task);
@@ -71,7 +72,6 @@
 	  var fileID = _ref2.fileID,
 	      status = _ref2.status;
 	
-	  console.log('new status: ', fileID, '/', status);
 	  var statusTD = $("#status-" + fileID);
 	  statusTD.text(status);
 	  if (status == 'done' || status == 'removed') checkQuota();
@@ -79,25 +79,20 @@
 	
 	var myID,
 	    selectedPeerID,
-	    users = {};
-	var ws = new WebSocket('wss://192.168.0.199:8443'); // todo 不能写成这样啊， 用localhost吧
-	// ws作为参数传给filer的ctor时候，check一下是否 wss， 因为不支持ws
-	var file; // tile to be sent
+	    users = {},
+	    file; // file to be sent;
+	
 	$("#inputFile").change(function (e) {
 	  file = e.target.files[0];
 	});
 	
+	// todo: if no peer selected, disable this button
 	$("#startTransfer").click(function () {
-	  // if no peer selected, disable this button.
-	  console.log('uid: ', selectedPeerID, ' is selected');
 	  filer.myID = myID;
 	  filer.signalingChannel = ws;
-	  //filer.createPeerConnection(myID, selectedPeerID, true, ws); // myID作为ctor参数预先获取，createPeer的时候就无需这个参数了。
 	  filer.send(selectedPeerID, file);
 	});
 	
-	// get currently selected peerID
-	// with checkbox/radio buttons, use 'change' event
 	$("#peerListContainer").on('change', 'input:radio[name="peerList"]', function () {
 	  selectedPeerID = $(this).val();
 	});
@@ -106,15 +101,14 @@
 	  filer.removeTask($(e.target).data('fileid'));
 	});
 	
-	checkQuota();
 	function checkQuota() {
-	  // https://developer.chrome.com/apps/offline_storage
 	  navigator.webkitTemporaryStorage.queryUsageAndQuota(function (usedBytes, grantedBytes) {
 	    $("#fileSystemQuota").text("Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes / grantedBytes * 100) + "%)");
 	  }, function (err) {
 	    console.log('Error querying temporary storage: ', err);
 	  });
 	}
+	checkQuota();
 	
 	function addTask(task) {
 	  var tbody = $('#taskList').find('tbody');
@@ -130,8 +124,7 @@
 	  tbody.append($("<tr>" + fileName + progress + fileSize + fileFrom + fileTo + fileStatus + fileButton + "</tr>"));
 	}
 	
-	// if currently selected peer goes offline, selectedPeerID should be set to null
-	// add peer(s) to peerList
+	// todo: if currently selected peer goes offline, selectedPeerID should be set to null
 	function addPeers(peers) {
 	  var peersDIV = '';
 	  peers.forEach(function (p) {
@@ -140,48 +133,56 @@
 	  $('#peerListContainer').append(peersDIV);
 	}
 	
+	// todo: if the currently selected peer is removed, disable the 'start transfer' button
 	function removePeer(peer) {
-	  // todo check whether the currently selected peer is removed, if so, disable the 'start transfer' button
 	  console.log('removing: ', peer);
 	  $('#' + peer).closest("div.radio").remove();
 	}
 	
+	var ws = new WebSocket('wss://192.168.0.199:8443'); // todo 不能写成这样啊， 用localhost吧
+	ws.onopen = function (evt) {
+	  filer.signalingChannel = ws;
+	  console.log('webSocket connected');
+	};
+	
 	ws.onmessage = function (msg) {
 	  try {
 	    var msgObj = JSON.parse(msg.data);
-	    console.log('new msg from ws server: ', msgObj);
-	    switch (msgObj.msgType) {
-	      case "newUser":
-	        users[msgObj.userID] = true;
-	        addPeers([msgObj.userID]);
-	        console.log('new comer: ', msgObj.userID);
-	        break;
-	      case "removeUser":
-	        delete users[msgObj.userID];
-	        removePeer(msgObj.userID);
-	        console.log('remove user: ', msgObj.userID);
-	        break;
-	      case "profile":
-	        msgObj.peersID.forEach(function (p) {
-	          return users[p] = true;
-	        });
-	        console.log('profile: my uid: ', msgObj.userID, ', peersID: ', msgObj.peersID);
-	        myID = msgObj.userID;
-	        addPeers(msgObj.peersID);
-	        $('#myID').text('my ID: ' + msgObj.userID);
-	        break;
-	      case "signaling":
-	        filer.myID = myID;
-	        filer.signalingChannel = ws;
-	        filer.handleSignaling(msgObj);
-	        break;
-	      default:
-	        console.log('Oops. unknown msg: ', msgObj);
-	    }
 	  } catch (e) {
 	    console.log('Oops, unknown msg: ', e);
+	    return;
 	  }
-	  //console.log('current users: ', users)
+	  console.log('new msg from ws server: ', msgObj);
+	  switch (msgObj.msgType) {
+	    case "newUser":
+	      users[msgObj.userID] = true;
+	      addPeers([msgObj.userID]);
+	      console.log('new comer: ', msgObj.userID);
+	      break;
+	
+	    case "removeUser":
+	      delete users[msgObj.userID];
+	      removePeer(msgObj.userID);
+	      console.log('remove user: ', msgObj.userID);
+	      break;
+	
+	    case "profile":
+	      msgObj.peersID.forEach(function (p) {
+	        return users[p] = true;
+	      });
+	      console.log('profile: my uid: ', msgObj.userID, ', peersID: ', msgObj.peersID);
+	      filer.myID = myID = msgObj.userID;
+	      addPeers(msgObj.peersID);
+	      $('#myID').text('my ID: ' + msgObj.userID);
+	      break;
+	
+	    case "signaling":
+	      filer.handleSignaling(msgObj);
+	      break;
+	
+	    default:
+	      console.log('Oops. unknown msg: ', msgObj);
+	  }
 	};
 	
 	function getFileSize(bytes, si) {
@@ -207,28 +208,28 @@
 	const chunkSize = msgPayloadSize * 32;  // each chunk need to send 32 msg in a loop. This is also the memStore/buffer size to store the current chunk
 	
 	module.exports = Filer;
-	
-	function Filer({myID, ws}){ // need more arguments: iceServer
-	  this.signalingChannel = ws || null;
+	function Filer({myID, signalingChannel, webrtcConfig}){
 	  this.myID = myID || '';
+	  this.signalingChannel = signalingChannel || null;
+	  this._webrtcConfig = webrtcConfig
 	}
 	
 	Filer.prototype = new EventEmitter();
 	//Filer.prototype = Object.create(EventEmitter.prototype); // this is not gonna work, because the EM's this.events obj is not initialised, you must use an instance of EM.
 	Filer.prototype.constructor = Filer;
 	
-	Filer.prototype.peers = {};
-	Filer.prototype.tasks = [];
+	Filer.prototype.peers = {}; // should be renamed to _peers
+	Filer.prototype.tasks = []; // ditto
 	
-	Filer.prototype._createPeerConnection = function (offerUID, answerUID, initiator, signalingChannel) { // todo 用obj作为参数，而非多个individual arguments
-	  var peerID = initiator ? answerUID : offerUID;
+	Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
+	  var peerID = isInitiator ? answerUID : offerUID;
 	  if (this.peers[peerID]){ // this.peers[peerID] is an obj who has 2 keys: peerObj and files
-	    this.peers[peerID].peerObj = new Peer({initiator: initiator, trickle: true}); // peerObj is created by  _createPeerConnection(), files is created by _send() function
-	  } else { // 既然我调用 createConnection 则说明 this.peers[peerID] 肯定不存在, 否则要调用做啥呢?????? 怎么会需要if/else呢
-	    this.peers[peerID] = {peerObj: new Peer({initiator: initiator, trickle: true})}
+	    this.peers[peerID].peerObj = new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig});
+	  } else {
+	    this.peers[peerID] = {peerObj: new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig})}
 	  }
 	
-	  if (!this.peers[peerID].files){
+	  if (!this.peers[peerID].files){ // peerObj is created by _createPeerConnection(), files obj is created by _send() function
 	    this.peers[peerID].files = {sending: {}, receiving:{}}
 	  }
 	
@@ -251,7 +252,8 @@
 	    this._parseData({data: data, peerID: p._peerID});
 	  }.bind(this));
 	
-	  p.on('close', function(){ // todo: close and error evt: need to destroy all memStore associated with this broken peer
+	  p.on('close', function(){ // todo: close and error evt handler need to destroy all localBuffer, partly saved chunk and all other bookkeeping data...
+	  // ..., call removeTask() repeatedly to remove all associated data
 	    console.log('peer is closed')
 	  });
 	
@@ -266,7 +268,9 @@
 	  var p;
 	  this.peers[data.from] && (p = this.peers[data.from].peerObj);
 	
-	  if (!p){ // I'm answerer(initiator == false), potential race condition: A and B try to establish connection to other side at the same time
+	 // todo: potential conflicting condition: A and B try to establish connection to other side at the same time
+	 // there must be only one offerer, one answerer
+	  if (!p){ // I'm answerer(initiator == false)
 	    p = this._createPeerConnection(data.from, this.myID, false, this.signalingChannel);
 	  }
 	  p.signal(data.signalingData);
@@ -278,11 +282,9 @@
 	  var fileID = randomString();
 	  var newTask = {
 	    fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
-	    progress: 0, from: this.myID, to: toWhom, status: 'pending'
+	    progress: 0, from: this.myID, to: toWhom, status: 'pending' // status: pending/sending/receiving/done/removed
 	  };
 	  this.tasks.push(newTask);
-	  // status: pending/sending/receiving/done/removed.
-	
 	  this.emit('newTask', newTask);
 	
 	  if (!this.peers[toWhom]){
@@ -366,15 +368,16 @@
 	  }
 	};
 	
-	//---------- data protocol -----------------
-	// first 8 bytes is data type, just an integer from 0 to 4, 1 byte is enough, but for the padding purpose
-	// 0(fileMeta), file sender send this msg to file receiver, ask it to save this info(fileID/Name/Size/Type/...) in tasks obj, create the buffer to hold the incoming chunk, then send back the fileChunkReq
-	// 1(fileChunkReq), msg receiver(file sender) parse this msg, extract the fileID/chunkIdx, then read the data from file object, send the chunk(in a for loop) to file receiver
-	// 2(removeReq), msg receiver parse this msg, extract the fileID, do some cleanup for the specified file
-	// 3(fileChunk), file receiver parse this msg, save the msg data in corresponding buffer, if this is the last msg in a chunk, save the whole chunk in chrome FileSystem
-	// 4(receivedNotice), file receiver send this msg to file sender, notifying that the file has been successfully saved in chrome fileSystem
-	// fileID consumes 16bytes(8 random characters), fileIdx consumes 8bytes(just an integer),
-	
+	/*
+	---------- data protocol -----------------
+	first 8 bytes is data type, just an integer from 0 to 4, 1 byte is enough, but for the padding purpose
+	0(fileMeta), file sender send this msg to file receiver, ask it to save this info(fileID/Name/Size/Type/...) in tasks obj, create the buffer to hold the incoming chunk, then send back the fileChunkReq
+	1(fileChunkReq), msg receiver(file sender) parse this msg, extract the fileID/chunkIdx, then read the data from file object, send the chunk(in a for loop) to file receiver
+	2(removeReq), msg receiver parse this msg, extract the fileID, do some cleanup for the specified file
+	3(fileChunk), file receiver parse this msg, save the msg data in corresponding buffer, if this is the last msg in a chunk, save the whole chunk in chrome FileSystem
+	4(receivedNotice), file receiver send this msg to file sender, notifying that the file has been successfully saved in chrome fileSystem
+	fileID consumes 16bytes(8 random characters), fileIdx consumes 8bytes(just an integer),
+	*/
 	function makeFileMeta(fileInfo){
 	  // |dataType = 0(8bytes) | fileSize(8bytes) | fileID(8 chars, 16bytes) | fileNameLength(8 bytes) | 8 bytes padding | fileName | fileTypeLength(8bytes) | 8 byte padding | fileType(mime type |
 	  var buf = new ArrayBuffer( 8 + 8 + 16 + 8 + 8 + 128 + 8 + 8 + 128);
