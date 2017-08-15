@@ -71,8 +71,10 @@
 	  var fileID = _ref2.fileID,
 	      status = _ref2.status;
 	
+	  console.log('new status: ', fileID, '/', status);
 	  var statusTD = $("#status-" + fileID);
 	  statusTD.text(status);
+	  if (status == 'done' || status == 'removed') checkQuota();
 	});
 	
 	var myID,
@@ -81,6 +83,9 @@
 	var ws = new WebSocket('wss://192.168.0.199:8443'); // todo 不能写成这样啊， 用localhost吧
 	// ws作为参数传给filer的ctor时候，check一下是否 wss， 因为不支持ws
 	var file; // tile to be sent
+	$("#inputFile").change(function (e) {
+	  file = e.target.files[0];
+	});
 	
 	$("#startTransfer").click(function () {
 	  // if no peer selected, disable this button.
@@ -97,21 +102,31 @@
 	  selectedPeerID = $(this).val();
 	});
 	
-	$("#inputFile").change(function (e) {
-	  file = e.target.files[0];
+	$("#taskList").on('click', '.removeTask', function (e) {
+	  filer.removeTask($(e.target).data('fileid'));
 	});
+	
+	checkQuota();
+	function checkQuota() {
+	  // https://developer.chrome.com/apps/offline_storage
+	  navigator.webkitTemporaryStorage.queryUsageAndQuota(function (usedBytes, grantedBytes) {
+	    $("#fileSystemQuota").text("Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes / grantedBytes * 100) + "%)");
+	  }, function (err) {
+	    console.log('Error querying temporary storage: ', err);
+	  });
+	}
 	
 	function addTask(task) {
 	  var tbody = $('#taskList').find('tbody');
 	  var fileName = "<td id='fileName-" + task.fileID + "'>" + task.fileName + "</td>";
 	  var progress = "<td id='progress-" + task.fileID + "'>" + Math.floor(task.progress * 100) + "%</td>";
-	  var fileSize = "<td>" + GetFileSize(task.fileSize) + "</td>";
+	  var fileSize = "<td>" + getFileSize(task.fileSize) + "</td>";
 	  var fileFrom = myID == task.from ? 'me' : task.from;
 	  fileFrom = "<td>" + fileFrom + "</td>";
 	  var fileTo = myID == task.to ? 'me' : task.to;
 	  fileTo = "<td>" + fileTo + "</td>";
 	  var fileStatus = "<td id='status-" + task.fileID + "'>" + task.status + "</td>";
-	  var fileButton = "<td><button type='button' class='btn btn-primary'>clear</button></td>";
+	  var fileButton = "<td><button type='button' data-fileid='" + task.fileID + "' class='btn btn-primary removeTask'>remove</button></td>";
 	  tbody.append($("<tr>" + fileName + progress + fileSize + fileFrom + fileTo + fileStatus + fileButton + "</tr>"));
 	}
 	
@@ -131,7 +146,6 @@
 	  $('#' + peer).closest("div.radio").remove();
 	}
 	
-	// ws.onopen = () => {}, onmessage, onclose, onerror
 	ws.onmessage = function (msg) {
 	  try {
 	    var msgObj = JSON.parse(msg.data);
@@ -170,7 +184,7 @@
 	  //console.log('current users: ', users)
 	};
 	
-	function GetFileSize(bytes, si) {
+	function getFileSize(bytes, si) {
 	  var thresh = si ? 1000 : 1024;
 	  if (Math.abs(bytes) < thresh) {
 	    return bytes + ' B';
@@ -267,7 +281,7 @@
 	    progress: 0, from: this.myID, to: toWhom, status: 'pending'
 	  };
 	  this.tasks.push(newTask);
-	  // status: receiving/sending/pending/done/removing/removed. when a chunk is in transfer, you have to wait for it to finish, during which the status is stopping, after that, it's stopped
+	  // status: pending/sending/receiving/done/removed.
 	
 	  this.emit('newTask', newTask);
 	
@@ -292,32 +306,43 @@
 	};
 	
 	Filer.prototype.removeTask = function(fileID){
-	  // 连接未建立, 直接在 files{sending:{...}} 中删除, tasks中删除, 再触发 removed evt. 未建立时, 接受方是不会收到new task, 其界面上也不会有内容
-	  // 连接已建立, 根据fileID找到peer obj, 给对方发 removeRequest, 同时己方触发 removing evt, 己方的 sendChunk, saveChunk 中判断该fileID status, 是removing, 则: 清空对应的 buffer, fileObj, 触发removed evt
-	  // 接受方还要在 FS 中也删除.
-	  // 收到 removeReq 后如何处理? 先判断该req中的fileID是否存在, 可能本地已经remove了(可能双方同时点击remove按钮), 还存在, 则: fire removing evt
+	// todo: peer's close/error evt handler must call removeTask
+	// removeTask() is called either by user clicking the 'remove' button, or receiving the 'removeReq' peer msg
+	// 2 pieces of data need to be removed for file sender: item in tasks array, object on this.peers.peerID.files.sending.fileID
+	// 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FIleSystem
 	
-	  // _runTask() 呢, 要做些啥判断不? NO
-	  // 对于sender, _sencChunk 调用前判断一下是否当前fileID处于removing, Y 则不执行后续代码, 且全部清空send filer obj
-	  // _sendChunk 调用后也判断一下................., NOOOOOOO,
-	  // 我在 _sendChhunk 时候执行了remove, 且发了removeReq, 对方收到后不会再发 chunkReq, 我也不会再有机会调用 _sencChunk, 故: 没机会清空 files{sending}了????
+	  // 文件名有空格, 特殊字符咋办? they are part of the url now?????
+	  var fileStat = this._getFileStat(fileID);
+	  if (!fileStat){return}
 	
+	  var fileToBeRemoved, peer;
+	  var peerList = Object.keys(this.peers);
+	  for (let i = 0; i< peerList.length; i++){
+	    fileToBeRemoved = this.peers[ peerList[i] ].files.sending[fileID] || this.peers[ peerList[i] ].files.receiving[fileID];
+	    if (fileToBeRemoved) {
+	      if (fileToBeRemoved instanceof Uint8Array){ // delete the file in chrome FS
+	      // this is an unsafe operation, it's possible that data is being written at the same time it's being removed, thus cause the following error:
+	      // Uncaught (in promise) DOMException: It was determined that certain files are unsafe for access within a Web application, or that too many calls are being made on file resources.
+	        fs({fileName: fileStat.fileName}).then(getFile).then(removeFile)
+	      }
+	      delete this.peers[ peerList[i]].files.sending[fileID]; // just one of them exist, but it doesn't hurt to delete a non-exist object
+	      delete this.peers[ peerList[i]].files.receiving[fileID];
+	      peer = this.peers[ peerList[i]].peerObj;
 	
-	  // 只需 _sencChunk 内第一行判断: fileID 是否存在, Y继续, N退出
+	      if (peer && peer.connected){
+	        peer.send(makeRemoveReq(fileID));
+	      }
+	      break
+	    }
+	  }
 	
-	  // 如果我自说自话把 task 删除, 如果对方用 react 把task 作为state, 岂不是对方不能再调用 on('removeTask'), 因为task已经不存在了.????????????
-	  // tasks是给我内部用的, 和react无关, react的做法: 触发了 newTask, 自己加到state中, 触发了 removeTask, 自己setState 去remove掉, react的state(or redux)和我的task完全独立.
-	  // readme 中提示:  you are not supposed to iterate this tasks(or modify it), instead, you should use evt handler to ****
-	  // 发送方收到 chunkReq, 但fileID不存在, 则肯定是发送方先一步删除该文件了, 此时照样发送 removeReq给对方.
-	  // 各自的 removeReqParse 中, 也要判断fileID是否存在, 可能双方同时点击remove, 故: 我先一步remove了, 之后又收到 removeReq, 如果不存在, 不要报错.
+	  this._updateStatus({fileID: fileID, status: 'removed'}); // must call this before the following tasks.splice, otherwise, the task is gone
 	
-	
-	  // 因为forloop阶段??? 有必要吗? 不是说js在一个function内执行完再执行其他code????
-	  // 当触发了 removed evt, 说明tasks中也不存在了, buffer中, peers[files] 中都不存在了.
-	  // getPeerByFileID, check peer connectedness
-	  // peer.connect() 内部也要check, 其 _runTask 时, 要check, 该file是否removed
-	
-	  //this._updateStatus({fileID: fileID, status: 'removing'});
+	  var taskIdx = this.tasks.indexOf(fileStat);
+	  if (taskIdx != -1){ // redundant
+	    this.tasks.splice(taskIdx, 1);
+	  }
+	  console.log('after removing task, now task is: ', this.tasks);
 	};
 	
 	Filer.prototype._runTask = function(){
@@ -413,7 +438,21 @@
 	  return chunkInfo;
 	}
 	
-	// makeFileChunk() function is built into _sendChunk()
+	function makeRemoveReq(fileID){ // ask receiver/sender to stop receiving/sending the next chunk and cancel the whole transfer operation
+	  var buf = new ArrayBuffer(32);
+	  new Float64Array(buf, 0, 1)[0] = 2; // dataType = 2
+	  var fileIDbuf = new Uint16Array(buf,16, 8);
+	  for(let i=0; i<fileIDbuf.length; i++){
+	    fileIDbuf[i] = fileID.charCodeAt(i)
+	  }
+	  return buf;
+	}
+	
+	function parseRemoveReq(data){
+	  return String.fromCharCode.apply(null, new Uint16Array(data.buffer, 16, 8));
+	}
+	
+	// makeFileChunk() function is built into _sendChunk(), its dataType is 3
 	function parseFileChunk(data){
 	  var chunk = {};
 	  chunk.chunkIdx = new Float64Array(data.buffer, 8, 1)[0];
@@ -423,38 +462,36 @@
 	  return chunk;
 	}
 	
-	function makeReceivedNotice(fileID){ // notify sender I have received the file successfully
-	  var buf = new ArrayBuffer(32); //
+	// notify sender I have received and saved the file successfully
+	function makeReceivedNotice(fileID){ // this is technically the same as makeRemoveReq, only with different dataType, consider factoring into one function
+	  var buf = new ArrayBuffer(32);
 	  new Float64Array(buf, 0, 1)[0] = 4; // dataType = 4
 	
-	// there is a 8 bytes hole between dataType and fileID
-	  var fileIDbuf = new Uint16Array(buf,16, 8); // fileID(8 character, 16 bytes)
+	// there is a 8 bytes hole(padding purpose) between dataType and fileID
+	  var fileIDbuf = new Uint16Array(buf,16, 8);
 	  for(let i=0; i<fileIDbuf.length; i++){
 	    fileIDbuf[i] = fileID.charCodeAt(i)
 	  }
 	  return buf;
 	}
 	
-	function parseReceivedNotice(data){ // just return the fileID
+	function parseReceivedNotice(data){ // this is technically the same as parseRemoveReq(), consider factoring into one function
 	  return String.fromCharCode.apply(null, new Uint16Array(data.buffer, 16, 8));
 	}
 	
-	function makeRemoveReq(){ // ask receiver/sender to stop receiving/sending the next chunk and cancel the whole operation
-	
-	}
-	
-	function parseRemoveReq(){
-	
-	}
-	
 	Filer.prototype._sendChunk = function({fileID, chunkIdx, peerID}){
-	  if (chunkIdx == 0){
+	  var p = this.peers[peerID].peerObj;
+	  var fileStat = this._getFileStat(fileID);
+	  if (!fileStat){ // file receiver still has fileID, but file sender doesn't, that means file sender has actively removed the file
+	    return
+	  }
+	
+	  if (chunkIdx === 0){
 	    this._updateStatus({fileID: fileID, status: 'sending'})
 	  }
 	
 	  const fileObj = this.peers[peerID].files.sending[fileID];
-	  var p = this.peers[peerID].peerObj;
-	  var slice = fileObj.slice(chunkSize * chunkIdx , chunkSize * (1 + chunkIdx)); // slice(startingByte, endingByte)
+	  var slice = fileObj.slice(chunkSize * chunkIdx , chunkSize * (1 + chunkIdx)); // slice(startingByte, excludingEndingByte)
 	  var reader = new window.FileReader();
 	  reader.readAsArrayBuffer(slice);
 	  reader.onload = function(evt) {
@@ -471,7 +508,7 @@
 	    var memStore = new Uint8Array(evt.target.result);
 	    const msgCount = Math.ceil( memStore.byteLength / msgPayloadSize );
 	    var msg, data;
-	    for (var i=0; i<msgCount; i++){
+	    for (let i=0; i<msgCount; i++){
 	      new Float64Array(fileChunkMeta, 16, 1)[0] = i;
 	      data = memStore.slice(i * msgPayloadSize, (i+1) * msgPayloadSize);
 	      msg = new Uint8Array(48 + data.byteLength);
@@ -483,7 +520,7 @@
 	};
 	
 	Filer.prototype._getFileStat = function(fileID){
-	  var fileStat = {};
+	  var fileStat;
 	  for (let i = 0; i< this.tasks.length; i++){
 	    if (this.tasks[i].fileID === fileID){
 	      fileStat = this.tasks[i];
@@ -496,7 +533,7 @@
 	Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}){
 	  for (let i = 0; i < this.tasks.length; i++){
 	    if (this.tasks[i].fileID === fileID){
-	      this.emit('newProgress', {fileID, progress, fileName, fileURL}); // only receivers pass fileName/fileURL when the whole file is saved
+	      this.emit('newProgress', {fileID, progress, fileName, fileURL}); // only file receivers pass fileName/fileURL when the whole file is saved
 	      this.tasks[i].progress = progress;
 	      if (progress === 1){
 	        this._updateStatus({fileID: fileID, status: 'done'})
@@ -516,37 +553,40 @@
 	  }
 	};
 	
-	Filer.prototype._saveChunk = function(data) {
+	Filer.prototype._saveChunk = function(data) { // actually, it should be named _saveChunkMessage()
 	  var chunk = parseFileChunk(data.data);
-	  if (chunk.chunkIdx === 0){
-	    this._updateStatus({fileID: chunk.fileID, status: 'receiving'})
+	  var fileStat = this._getFileStat(chunk.fileID);
+	  var p = this.peers[data.peerID].peerObj;
+	
+	  if (!fileStat){ // file sender has fileID, but file receiver doesn't, that means file receiver has actively removed the file
+	    return
 	  }
 	
 	  var receivingBuffer = this.peers[data.peerID].files.receiving[chunk.fileID];
-	  //if (!receivingBuffer){
-	    //receivingBuffer = this.peers[data.peerID].files.receiving[chunk.fileID] = new Uint8Array( chunkSize )
-	  //}
 	  receivingBuffer.set(new Uint8Array(chunk.data), msgPayloadSize * chunk.msgIdx);
 	
-	  var fileStat = this._getFileStat(chunk.fileID);
+	  if (chunk.chunkIdx === 0 && chunk.msgIdx === 0){
+	    this._updateStatus({fileID: chunk.fileID, status: 'receiving'})
+	  }
+	
 	  const maxMsgCount = chunkSize / msgPayloadSize;
 	  if (chunk.msgIdx + 1 == maxMsgCount
 	      || chunk.msgIdx + chunk.chunkIdx * maxMsgCount == Math.floor(fileStat.fileSize / msgPayloadSize) ){
 	
-	    var isLastChunk = chunk.chunkIdx + 1 == Math.ceil(fileStat.fileSize / chunkSize ); // last chunk in current file?
+	    var isLastChunk = chunk.chunkIdx + 1 == Math.ceil(fileStat.fileSize / chunkSize );
 	    if (isLastChunk){ // each chunkSize is "msgPayloadSize * 32", but the last chunk is probably less than that, I need to grab the exact size
-	      writeFile(this.peers[data.peerID].peerObj, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+	      writeFile(p, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
 	    } else {
-	      writeFile(this.peers[data.peerID].peerObj, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+	      writeFile(p, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
 	    }
 	  }
 	};
 	
 	Filer.prototype._parseData = function(data){
-	  var dataType = new Float64Array(data.data.buffer, 0, 1)[0]; // 凡是data channel过来的数据, 需要parse, 一律读取该数据的 data.buffer
+	  var fileID, dataType = new Float64Array(data.data.buffer, 0, 1)[0]; // it's the data.buffer need to be parsed, not data
 	  switch (dataType){
 	    case 0: // fileMeta: filename, size, id, type
-	      var fileInfo = parseFileMeta(data.data);
+	      var fileInfo = parseFileMeta(data.data); // todo: case 0 也像其他case一样,放在函数中单独处理.
 	      if (!this.peers[data.peerID].files.receiving[ fileInfo.id ]){
 	        this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create buffer for incoming file chunk data
 	      }
@@ -562,24 +602,30 @@
 	
 	    case 1: // fileChunkReq, receiver send the chunk requested(read from disk into memStore first)
 	      var chunkInfo = parseFileChunkReq(data.data);
+	      var fileStat = this._getFileStat(chunkInfo.id); // todo: case 3 是不fileStat是否存在, 放在 saveChunk中判断, 而本例case1最好也放在 sendChunk中判断, 否则显得太罗嗦. updateProgress 也放在 sendChunk中
+	      if (!fileStat) return; // undefined fileStat means user has removed this file(and cancel the whole file transfer operation)
+	
 	      if (chunkInfo.chunkIdx > 0){ // when the next fileChunkReq comes, I know the previous chunk has been sent
-	        var fileStat = this._getFileStat(chunkInfo.id);
 	        this._updateProgress({fileID: chunkInfo.id, progress: chunkSize * chunkInfo.chunkIdx / fileStat.fileSize});
 	      }
 	      this._sendChunk({fileID: chunkInfo.id, chunkIdx: chunkInfo.chunkIdx, peerID: data.peerID});
 	      break;
 	
-	    case 2: // stop request, whenever sender/receiver received this req, stop sending/receiving the next chunk.
-	      console.log('not implemented yet');
+	    case 2: // file remove request, whenever sender/receiver received this req, stop sending/receiving the next chunk, and remove all accompanying data
+	      fileID = parseRemoveReq(data.data);
+	      console.log('fileRemoveReq received: ', fileID);
+	      this.removeTask(fileID);
 	      break;
 	
 	    case 3: // fileChunk data, receiver save it into file buffer, actually it's one piece of the fileChunk
 	      this._saveChunk(data);
 	      break;
 	
-	    case 4: // file receiver notify sender, the file has been successfully saved into FileSystem
-	      var fileID = parseReceivedNotice(data.data);
-	      this._updateProgress({fileID: fileID, progress: 1});
+	    case 4: // file receiver notify file sender, the file has been successfully saved into FileSystem
+	      this._updateProgress({
+	        fileID: parseReceivedNotice(data.data),
+	        progress: 1
+	      });
 	      this._runTask(); // p2p connection might take few seconds to create, during that time, users might send multiple files to the same peer
 	      break; // when p2p connection established, only the first pending task get to run, we need to run the rest if there are.
 	
@@ -591,13 +637,12 @@
 	const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) => {
 	  if (fileObj.fileWriter) { // todo, when the whole file is done writing, remove this fileWriter on fileObj(in tasks)
 	    doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
-	    // 此时FS中可能已经有部分data写入了, 必须transfer view是提示用户, 该文件传输错误, 需要删除, 只有执行了删除, 才把整个 fileObj 删除(它也是挂在另外一个obj上的).
-	  } else { // 如何告知sender, snackbar显示, 同时transfer view上也要显示.
-	    fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(writer => { // 如果同名文件已经在FS中存在, 则: getFile 会在文件名后生成一个random str 供后面的 getFileWriter 写入之用.
+	  } else {
+	    fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(writer => {
 	      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
 	    }, err => { // any error or reject in the upstream promise chain would be handled in this block.
-	      //console.log('error in promise chain: ', err); // 还要告知对方, errHandler告知本人.
-	      fileObj.fileWriter = null; // 尤其这个fileWriter, 不reset to null, the next file writer would use this one.
+	      console.log('error in promise chain: ', err);
+	      fileObj.fileWriter = null;
 	    });
 	  }
 	};
@@ -611,18 +656,19 @@
 	      var url = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
 	      var port = window.location.port ? ':' + window.location.port : '';
 	      url += port + '/temporary/' + fileObj.fileName;
+	      url = encodeURI(url);
 	      updateProgress({fileID: fileObj.fileID, progress: 1, fileName: fileObj.fileName, fileURL: url});
 	      peer.send(makeReceivedNotice(fileObj.fileID));
 	    } else {
 	      updateProgress({fileID: fileObj.fileID, progress: (chunkIdx + 1) * chunkSize / fileObj.fileSize});
 	      peer.send(makeFileChunkReq({chunkIdx: chunkIdx + 1, id: fileObj.fileID}));
 	    }
-	  }; // 即使写入失败, onwriteend也会触发, 但此刻seek value就不对了, 繁啊.
+	  }; // even if error occurred during write(), onwriteend still got fired, causing the wrong seek value
 	};
 	
 	// ------------------------- filesystem API
 	window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
-	// https://www.toptal.com/javascript/javascript-promises
+	
 	const fs = fileObj => {
 	  return new Promise(function (resolve, reject) {
 	    window.requestFileSystem(window.TEMPORARY, 4*1024*1024*1024,
@@ -671,7 +717,7 @@
 	  })
 	};
 	
-	const removeFile =  ({fileEntry}) => { // 必须 fs(fileObj).then(getFile).then(removeFile), 这样调用.
+	const removeFile =  ({fileEntry}) => { // fs(fileObj).then(getFile).then(removeFile), fileObj must at least has a fileName property
 	  return new Promise(function(resolve, reject){
 	    fileEntry.remove(()=>{
 	      resolve('success')
@@ -729,19 +775,6 @@
 	  var result = '';
 	  for (var i = length; i > 0; --i) result += chars[Math.floor(Math.random() * chars.length)];
 	  return result;
-	}
-	
-	function ab2str(buf) {
-	  return String.fromCharCode.apply(null, new Uint16Array(buf));
-	}
-	
-	function str2ab(str) {
-	  var buf = new ArrayBuffer(str.length*2); // 2 bytes for each char
-	  var bufView = new Uint16Array(buf);
-	  for (var i=0, strLen=str.length; i<strLen; i++) {
-	    bufView[i] = str.charCodeAt(i);
-	  }
-	  return buf;
 	}
 
 
