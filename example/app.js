@@ -57,20 +57,21 @@ wss.on('connection', function(ws){
     try{
       var msgObj = JSON.parse(msg);
       console.log('parsed msg: ', msgObj);
-      switch (msgObj.msgType) {
-        case "signaling":
-          console.log('signaling data');
-          console.log('online users: ', users);
-          var targetClient = users[msgObj.to];
-          if (targetClient && targetClient.readyState === WebSocket.OPEN){
-            console.log('relay signaling: ', msgObj);
-            targetClient.send(msg)
-          }
-          break;
-        default: console.log('Oops. unknown msg: ', msgObj)
-      }
     } catch (e){
       console.log('Oops, unknown msg: ', e)
+    }
+    switch (msgObj.msgType) {
+      case "signaling":
+        console.log('signaling data');
+        console.log('online users: ', users);
+        var targetClient = users[msgObj.to];
+        if (targetClient && targetClient.readyState === WebSocket.OPEN){
+          console.log('relay signaling: ', msgObj);
+          targetClient.send(msg)
+        }
+        break;
+      default:
+        console.log('Oops. unknown msg: ', msgObj)
     }
   });
 
