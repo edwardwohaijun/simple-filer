@@ -68,7 +68,7 @@ filer.on('status', function({fileID, status}){ // file transfer status: pending/
 ## Example app
 Inside the example folder, there is a full-featured example app.
 ```bash
-cd example
+cd node_modules/simple-filer/example
 npm install
 npm run start
 ```
