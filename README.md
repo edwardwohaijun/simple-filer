@@ -78,7 +78,8 @@ That's because WebRTC requires WebServer to run on TLS. I use a self-signed cert
 If you want to run this app in your local network, edit the `example/public/javascripts/bundle.js`, search for `var ws = new WebSocket('wss:`, change the IP address, then restart the app.
 This example app works pretty well in local network(small office, home), because the data goes directly between two browsers, it's even faster than data copy using thumb-drive.
 You can also open the `example/public/javascripts/src/demo.js` to know how it works. Here is a screenshot of this app:
-![running demo](https://media.worksphere.cn/repo/simple-filer/demo-977.gif)
+
+![running demo](https://media.worksphere.cn/repo/simple-filer/demo-640.gif)
 
 
 ## API
