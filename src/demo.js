@@ -87,7 +87,7 @@ function removePeer(peer){
   $('#' + peer).closest("div.radio").remove()
 }
 
-var ws = new WebSocket('wss://192.168.0.199:8443'); // todo 不能写成这样啊， 用localhost吧
+var ws = new WebSocket('wss://127.0.0.1:8443');
 ws.onopen = evt => {
   filer.signalingChannel = ws;
   console.log('webSocket connected');

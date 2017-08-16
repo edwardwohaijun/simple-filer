@@ -1,11 +1,31 @@
 {
   "name": "simple-filer",
-  "description": "Simple P2P file transfer between 2 browsers",
+  "description": "Simple web-based P2P file transfer library",
   "version": "1.0.0",
   "author": {
     "name": "Edward Wo",
     "email": "edward.wo823@gmail.com",
     "url": "http://worksphere.cn/home"
+  },
+  "keywords": [
+    "p2p file transfer",
+    "data channel",
+    "p2p",
+    "peer",
+    "peer-to-peer",
+    "file transfer",
+    "webrtc"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edwardwohaijun/simple-filer"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "cp index.js node_modules/simple-filer; cp src/demo.js example/public/javascripts/src/; webpack --config webpack.config.js --progress;"
+  },
+  "testling": {
+    "files": "test/*.js"
   },
   "bugs": {
     "url": "https://github.com/edwardwohaijun/simple-filer/issues"
@@ -34,25 +54,5 @@
     "webpack": "^1.13.1",
     "webpack-dev-server": "^1.14.1"
   },
-  "keywords": [
-    "data channel",
-    "p2p",
-    "peer",
-    "peer-to-peer",
-    "file transfer",
-    "p2p file transfer",
-    "webrtc"
-  ],
-  "license": "MIT",
-  "main": "index.js",
-  "repository": {
-    "type": "git",
-    "url": "git://github.com/edwardwohaijun/simple-filer.git"
-  },
-  "scripts": {
-    "build": "cp index.js node_modules/simple-filer; cp src/demo.js example/public/javascripts/src/; webpack --config webpack.config.js --progress;"
-  },
-  "testling": {
-    "files": "test/*.js"
-  }
+  "license": "MIT"
 }
