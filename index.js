@@ -80,7 +80,7 @@ Filer.prototype.send = function(toWhom, fileObj){
     progress: 0, from: this.myID, to: toWhom, status: 'pending' // status: pending/sending/receiving/done/removed
   };
   this.tasks.push(newTask);
-  this.emit('newTask', newTask);
+  this.emit('task', newTask);
 
   if (!this.peers[toWhom]){
     this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}, receiving:{}}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
@@ -136,10 +136,9 @@ Filer.prototype.removeTask = function(fileID){
   this._updateStatus({fileID: fileID, status: 'removed'}); // must call this before the following tasks.splice, otherwise, the task is gone
 
   var taskIdx = this.tasks.indexOf(fileStat);
-  if (taskIdx != -1){ // redundant
+  if (taskIdx != -1){ // redundant ???
     this.tasks.splice(taskIdx, 1);
   }
-  console.log('after removing task, now task is: ', this.tasks);
 };
 
 Filer.prototype._runTask = function(){
@@ -291,7 +290,7 @@ Filer.prototype._processFileMeta = function(data){
     progress: 0, from: data.peerID, to: this.myID, status: 'pending'
   };
   this.tasks.push(newTask);
-  this.emit('newTask', newTask);
+  this.emit('task', newTask);
   this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
 };
 
@@ -348,7 +347,7 @@ Filer.prototype._getFileStat = function(fileID){
 Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}){
   for (let i = 0; i < this.tasks.length; i++){
     if (this.tasks[i].fileID === fileID){
-      this.emit('newProgress', {fileID, progress, fileName, fileURL}); // only file receivers pass fileName/fileURL when the whole file is saved
+      this.emit('progress', {fileID, progress, fileName, fileURL}); // only file receivers pass fileName/fileURL when the whole file is saved
       this.tasks[i].progress = progress;
       if (progress === 1){
         this._updateStatus({fileID: fileID, status: 'done'})
@@ -361,7 +360,7 @@ Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}
 Filer.prototype._updateStatus = function({fileID, status}){
   for (let i = 0; i < this.tasks.length; i++){
     if (this.tasks[i].fileID === fileID){
-      this.emit('newStatus', {fileID: fileID, status: status});
+      this.emit('status', {fileID: fileID, status: status});
       this.tasks[i].status = status;
       break;
     }

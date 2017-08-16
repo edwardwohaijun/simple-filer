@@ -49,11 +49,11 @@
 	var Filer = __webpack_require__(1);
 	var filer = new Filer({});
 	
-	filer.on('newTask', function (task) {
+	filer.on('task', function (task) {
 	  addTask(task);
 	});
 	
-	filer.on('newProgress', function (_ref) {
+	filer.on('progress', function (_ref) {
 	  var fileID = _ref.fileID,
 	      progress = _ref.progress,
 	      fileName = _ref.fileName,
@@ -67,7 +67,7 @@
 	  }
 	});
 	
-	filer.on('newStatus', function (_ref2) {
+	filer.on('status', function (_ref2) {
 	  var fileID = _ref2.fileID,
 	      status = _ref2.status;
 	
@@ -284,7 +284,7 @@
 	    progress: 0, from: this.myID, to: toWhom, status: 'pending' // status: pending/sending/receiving/done/removed
 	  };
 	  this.tasks.push(newTask);
-	  this.emit('newTask', newTask);
+	  this.emit('task', newTask);
 	
 	  if (!this.peers[toWhom]){
 	    this.peers[toWhom] = {files: {sending: {[fileID]: fileObj}, receiving:{}}}; // for sending: {fileID: fileObj}, for receiving: {fileID: arrayBuffer}
@@ -340,10 +340,9 @@
 	  this._updateStatus({fileID: fileID, status: 'removed'}); // must call this before the following tasks.splice, otherwise, the task is gone
 	
 	  var taskIdx = this.tasks.indexOf(fileStat);
-	  if (taskIdx != -1){ // redundant
+	  if (taskIdx != -1){ // redundant ???
 	    this.tasks.splice(taskIdx, 1);
 	  }
-	  console.log('after removing task, now task is: ', this.tasks);
 	};
 	
 	Filer.prototype._runTask = function(){
@@ -495,7 +494,7 @@
 	    progress: 0, from: data.peerID, to: this.myID, status: 'pending'
 	  };
 	  this.tasks.push(newTask);
-	  this.emit('newTask', newTask);
+	  this.emit('task', newTask);
 	  this.peers[data.peerID].peerObj.send( makeFileChunkReq({chunkIdx: 0, id: fileInfo.id}) ); // send the chunk req for the 1st chunk
 	};
 	
@@ -552,7 +551,7 @@
 	Filer.prototype._updateProgress = function({fileID, progress, fileName, fileURL}){
 	  for (let i = 0; i < this.tasks.length; i++){
 	    if (this.tasks[i].fileID === fileID){
-	      this.emit('newProgress', {fileID, progress, fileName, fileURL}); // only file receivers pass fileName/fileURL when the whole file is saved
+	      this.emit('progress', {fileID, progress, fileName, fileURL}); // only file receivers pass fileName/fileURL when the whole file is saved
 	      this.tasks[i].progress = progress;
 	      if (progress === 1){
 	        this._updateStatus({fileID: fileID, status: 'done'})
@@ -565,7 +564,7 @@
 	Filer.prototype._updateStatus = function({fileID, status}){
 	  for (let i = 0; i < this.tasks.length; i++){
 	    if (this.tasks[i].fileID === fileID){
-	      this.emit('newStatus', {fileID: fileID, status: status});
+	      this.emit('status', {fileID: fileID, status: status});
 	      this.tasks[i].status = status;
 	      break;
 	    }
@@ -682,18 +681,18 @@
 	
 	const fileExists = ({root, fileObj}) => {
 	  return new Promise(function(resolve, reject) {
-	    root.getFile(fileObj.fileName, {create: false}, // 并非真的要获取fileEntry, 而是判断是否该文件存在, 故: 必须用: create: false
-	            fileEntry => { // 创建文件是在下一步: getFile中, 在那里, 有: create: true
+	    root.getFile(fileObj.fileName, {create: false}, // the point is not to get the fileEntry, but check whether the file with fileName already exists, thus use "create: false"
+	            fileEntry => {
 	              var filename = fileObj.fileName.substring(0, fileObj.fileName.lastIndexOf('.'));
 	              var ext = fileObj.fileName.substring(fileObj.fileName.lastIndexOf('.'));
-	              var randomStr = randomString(); // 待写入的文件名有重复, 则: 文件名后加 _randomStr + file extension
-	              fileObj.fileName = filename + '_' + randomStr + ext;
+	              var randomStr = randomString(); // if the file with fileName already exists, append the new filename with _randomStr ...
+	              fileObj.fileName = filename + '_' + randomStr + ext; // ... and file extension
 	              resolve({root:root, fileObj: fileObj});
 	            },
-	            err => { // 本promise的目的就在于: 判断待写入文件是否存在, 如果存在, 说明待写入文件需要换个文件名, 上面的handler中已经做此处理了.
-	              // 如果文件名不存在, 则: 可以直接写入, 此时对于我的case而言, 这个不算是err, 故: 还是执行resolve()
-	              //console.log(err.name); // chrome 54 用的err.name是 NotFoundError. 之前的版本用的是: NOT_FOUND_ERR,
-	              if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // 但可能执行getFile的时候出其他类型的错, 即: 非 NOT_FOUND_ERR, 此时才是真正的错, 执行reject, 让整个chain最后的err handler去处理.
+	            err => { // NOT_FOUND_ERR(or NotFoundError) occurred when the file with fileName doesn't exist...
+	              // ..., but in my case, this is not an error, so I call resolve(), only other type of errors need to call reject(err)
+	              //console.log(err.name);
+	              if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // chrome 54's err.name is NotFoundError, prior version use: NOT_FOUND_ERR
 	                resolve({root:root, fileObj: fileObj});
 	              } else reject(err)
 	            }
@@ -701,7 +700,7 @@
 	  })
 	};
 	
-	const getFile = ({root, fileObj}) => {
+	const getFile = ({root, fileObj}) => { // create the file and return its fileEntry obj
 	  return new Promise(function(resolve, reject){
 	    root.getFile(fileObj.fileName, {create:true}, fileEntry => {
 	      resolve({fileEntry: fileEntry, fileObj: fileObj});

@@ -1,11 +1,11 @@
 var Filer = require('simple-filer');
 var filer = new Filer({});
 
-filer.on('newTask', function(task) {
+filer.on('task', function(task) {
   addTask(task);
 });
 
-filer.on('newProgress', function({fileID, progress, fileName, fileURL}){
+filer.on('progress', function({fileID, progress, fileName, fileURL}){
   var progressTD = $("#progress-" + fileID);
   progressTD.text(Math.floor(progress * 100) + '%');
   if (progress === 1 && fileURL){
@@ -14,7 +14,7 @@ filer.on('newProgress', function({fileID, progress, fileName, fileURL}){
   }
 });
 
-filer.on('newStatus', function({fileID, status}){
+filer.on('status', function({fileID, status}){
   var statusTD = $("#status-" + fileID);
   statusTD.text(status);
   if (status == 'done' || status == 'removed') checkQuota()
