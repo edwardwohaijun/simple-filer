@@ -22,7 +22,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "build": "cp index.js node_modules/simple-filer; cp src/demo.js example/public/javascripts/src/; webpack --config webpack.config.js --progress;"
+    "buildDemo": "cp index.js node_modules/simple-filer; cp src/demo.js example/public/javascripts/src/; webpack --config webpack.config.js --progress;"
   },
   "testling": {
     "files": "test/*.js"
