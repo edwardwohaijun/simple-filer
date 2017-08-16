@@ -106,7 +106,7 @@ You don't need to compose this message yourself, you just call `filer.send())`, 
 filer.send(receiverUID, file)
 ```
 * `receiverUID` - the targeting user you want to send the file, UID is provided by your application
-* `file` - the html file object
+* `file` - the html file object.
 After calling `filer.send()`, a new task is created for both sender and receiver.
 ```
 filer.removeTask(taskID)
@@ -122,8 +122,8 @@ This is the moment you could add a html table row with the taskData.
 ```
 filer.on('progress, function({fileID, progress, fileName, fileURL}){})
 ```
-Fired when part of the file has been sent/received. You can use this event to show a progress bar,
-when the `progress` value hits 1 at receiving side, you can generate a link with `fileName` and `fileURL`.
+Fired when part of the file has been sent/received. You can use this event to show a progress bar.
+When the `progress` value hits 1 at receiving side, you can generate a link with `fileName` and `fileURL`.
 
 ```
 filer.on('status', function({fileID, status}){})
@@ -147,7 +147,8 @@ JavaScript is not very efficient at handling binary data.
 # Issues
 When a file is in receiving, removing it might cause an error(refer to #1).
 
-Besides, I have a personal chat web app([http://worksphere.cn/home](http://worksphere.cn/home), no registration needed), I also created a dedicated group for this project. If you have more issues or suggestions, just go in there.
+Besides, I have a personal chat web app([http://worksphere.cn/home](http://worksphere.cn/home), no registration needed).
+I also created a dedicated discussion group in my chat app for this project. If you have more issues or suggestions, just go in there.
 
 
 # License
