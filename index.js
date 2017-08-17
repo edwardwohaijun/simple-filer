@@ -53,6 +53,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
   });
 
   p.on('error', function(err){
+  // todo: this.emit('error', Error(....))
     console.log('peer error: ', err)
   });
 
@@ -72,8 +73,8 @@ Filer.prototype.handleSignaling = function(data){
 };
 
 Filer.prototype.send = function(toWhom, fileObj){
-  if (!fileObj) throw Error("no file selected");
-  if (!toWhom) throw Error("no peer selected");
+  if (!fileObj) throw Error("no file selected"); // todo: use this.emit('error', Error(....));
+  if (!toWhom) throw Error("no peer selected"); // ditto
   var fileID = randomString();
   var newTask = {
     fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
@@ -106,9 +107,8 @@ Filer.prototype.removeTask = function(fileID){
 // todo: peer's close/error evt handler must call removeTask
 // removeTask() is called either by user clicking the 'remove' button, or receiving the 'removeReq' peer msg
 // 2 pieces of data need to be removed for file sender: item in tasks array, object on this.peers.peerID.files.sending.fileID
-// 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FIleSystem
+// 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FileSystem
 
-  // 文件名有空格, 特殊字符咋办? they are part of the url now?????
   var fileStat = this._getFileStat(fileID);
   if (!fileStat){return}
 
@@ -145,9 +145,9 @@ Filer.prototype._runTask = function(){
   var t;
   for(let i = 0; i < this.tasks.length; i++) {
     if (this.tasks[i].status == 'pending') { // _runTask only run when p2p connection is established, thus when status is always pending, it means p2p connection failed
-      //this.tasks[i].status = 'running'; // the 'pending' status is soon to be updated by _sendChunk, _saveChunk
-      t = this.tasks[i];
-      break
+      this.tasks[i].status = '_running'; // the 'pending' status is soon to be updated by _sendChunk(and _saveChunk), but before that happened, there is a chance ...
+      t = this.tasks[i]; // ... user click 'send' again, that causes the same 'pending' task to run again. Thus, setting to '_running' prevent that case....
+      break; // ..., another approach is to use this.tasks.unshift(newTask) instead of this.tasks.push()
     }
   }
   if (t) {
@@ -425,6 +425,7 @@ Filer.prototype._parseData = function(data){
       break; // when p2p connection established, only the first pending task get to run, we need to run the rest if there are.
 
     default:
+      // todo: use this.emit('error', Error(....);
       console.log('Oops, unknown data type: ', dataType)
   }
 };
@@ -438,6 +439,7 @@ const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) =
       doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
     }, err => { // any error or reject in the upstream promise chain would be handled in this block.
       console.log('error in promise chain: ', err);
+      // todo: use this.emit('error', Error(....);
       fileObj.fileWriter = null;
     });
   }
@@ -445,7 +447,10 @@ const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) =
 
 const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
   writer.seek( chunkIdx * chunkSize);
-  writer.onerror = e => {console.log('Write failed: ' + e.toString()); }; // todo: need an universal err handler(send err msg to peer)
+  writer.onerror = e => {
+    console.log('Write failed: ' + e.toString());
+    // todo: use this.emit('error', Error(....); this error might need to notify the sending peer
+  };
   writer.write(new Blob([data], {type: fileObj.fileType}));
   writer.onwriteend = e => {
     if (isLastChunk){

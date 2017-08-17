@@ -116,6 +116,7 @@ After calling `filer.send()`, a new task is created for both sender and receiver
 filer.removeTask(taskID)
 ```
 When the file is received and saved successfully, you can choose to remove it by calling `removeTask()`.
+It's recommended to call this method after you have saved the file in your hard drive, otherwise it'd take unnecessary space.
 
 ## Events
 ```

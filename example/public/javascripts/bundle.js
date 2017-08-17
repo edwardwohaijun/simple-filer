@@ -76,6 +76,10 @@
 	  if (status == 'done' || status == 'removed') checkQuota();
 	});
 	
+	filer.on('error', function (err) {
+	  // not implemented yet
+	});
+	
 	var myID,
 	    selectedPeerID,
 	    users = {},
@@ -138,7 +142,8 @@
 	  $('#' + peer).closest("div.radio").remove();
 	}
 	
-	var ws = new WebSocket('wss://127.0.0.1:8443');
+	var ws = new WebSocket('wss://192.168.0.199:8443');
+	//var ws = new WebSocket('wss://127.0.0.1:8443');
 	ws.onopen = function (evt) {
 	  filer.signalingChannel = ws;
 	  console.log('webSocket connected');
@@ -222,7 +227,7 @@
 	
 	Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
 	  var peerID = isInitiator ? answerUID : offerUID;
-	  if (this.peers[peerID]){ // this.peers[peerID] is an obj who has 2 keys: peerObj and files
+	  if (this.peers[peerID]){ // this.peers[peerID] is an obj which has 2 keys: peerObj and files
 	    this.peers[peerID].peerObj = new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig});
 	  } else {
 	    this.peers[peerID] = {peerObj: new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig})}
@@ -276,8 +281,8 @@
 	};
 	
 	Filer.prototype.send = function(toWhom, fileObj){
-	  if (!fileObj) throw Error("no file selected");
-	  if (!toWhom) throw Error("no peer selected");
+	  if (!fileObj) throw Error("no file selected"); // todo: use this.emit('error', Error(....));
+	  if (!toWhom) throw Error("no peer selected"); // ditto
 	  var fileID = randomString();
 	  var newTask = {
 	    fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
@@ -310,9 +315,8 @@
 	// todo: peer's close/error evt handler must call removeTask
 	// removeTask() is called either by user clicking the 'remove' button, or receiving the 'removeReq' peer msg
 	// 2 pieces of data need to be removed for file sender: item in tasks array, object on this.peers.peerID.files.sending.fileID
-	// 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FIleSystem
+	// 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FileSystem
 	
-	  // 文件名有空格, 特殊字符咋办? they are part of the url now?????
 	  var fileStat = this._getFileStat(fileID);
 	  if (!fileStat){return}
 	
@@ -349,9 +353,9 @@
 	  var t;
 	  for(let i = 0; i < this.tasks.length; i++) {
 	    if (this.tasks[i].status == 'pending') { // _runTask only run when p2p connection is established, thus when status is always pending, it means p2p connection failed
-	      //this.tasks[i].status = 'running'; // the 'pending' status is soon to be updated by _sendChunk, _saveChunk
-	      t = this.tasks[i];
-	      break
+	      this.tasks[i].status = '_running'; // the 'pending' status is soon to be updated by _sendChunk(and _saveChunk), but before that happened, there is a chance ...
+	      t = this.tasks[i]; // ... user click 'send' again, that causes the same 'pending' task to run again. Thus, setting to '_running' prevent that case....
+	      break; // ..., another approach is to use this.tasks.unshift(newTask) instead of this.tasks.push()
 	    }
 	  }
 	  if (t) {
@@ -629,6 +633,7 @@
 	      break; // when p2p connection established, only the first pending task get to run, we need to run the rest if there are.
 	
 	    default:
+	      // todo: use this.emit('error', Error(....);
 	      console.log('Oops, unknown data type: ', dataType)
 	  }
 	};
@@ -642,6 +647,7 @@
 	      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
 	    }, err => { // any error or reject in the upstream promise chain would be handled in this block.
 	      console.log('error in promise chain: ', err);
+	      // todo: use this.emit('error', Error(....);
 	      fileObj.fileWriter = null;
 	    });
 	  }
@@ -649,7 +655,10 @@
 	
 	const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
 	  writer.seek( chunkIdx * chunkSize);
-	  writer.onerror = e => {console.log('Write failed: ' + e.toString()); }; // todo: need an universal err handler(send err msg to peer)
+	  writer.onerror = e => {
+	    console.log('Write failed: ' + e.toString());
+	    // todo: use this.emit('error', Error(....); this error might need to notify the sending peer
+	  };
 	  writer.write(new Blob([data], {type: fileObj.fileType}));
 	  writer.onwriteend = e => {
 	    if (isLastChunk){
@@ -666,7 +675,7 @@
 	  }; // even if error occurred during write(), onwriteend still got fired, causing the wrong seek value
 	};
 	
-	// ------------------------- chrome filesystem API(promise wrapper)
+	// ------------------------- chrome filesystem API(Promise wrapper)
 	window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 	
 	const fs = fileObj => {
