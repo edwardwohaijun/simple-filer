@@ -18,7 +18,7 @@ Filer.prototype.tasks = []; // ditto
 
 Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
   var peerID = isInitiator ? answerUID : offerUID;
-  if (this.peers[peerID]){ // this.peers[peerID] is an obj who has 2 keys: peerObj and files
+  if (this.peers[peerID]){ // this.peers[peerID] is an obj which has 2 keys: peerObj and files
     this.peers[peerID].peerObj = new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig});
   } else {
     this.peers[peerID] = {peerObj: new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig})}
@@ -462,7 +462,7 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updatePro
   }; // even if error occurred during write(), onwriteend still got fired, causing the wrong seek value
 };
 
-// ------------------------- chrome filesystem API(promise wrapper)
+// ------------------------- chrome filesystem API(Promise wrapper)
 window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 
 const fs = fileObj => {

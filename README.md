@@ -35,7 +35,8 @@ wss.on('connection', function(ws){
   });
 })
 ```
-All you need to do is parse the client message `{msgType: 'signaling', from: userID, to: userID, signalingData: data}`, and forward it to the specified user.
+All you need to do is assign a message handler for `ws.onmessage`, `JSON.parse` the message, if the `msgObj.msgType` is `signaling`,
+send the whole message to whoever `msgObj.to` is.
 
 ## client side
 ```javascript
@@ -77,7 +78,7 @@ That's because WebRTC requires WebServer to run on TLS. I use a self-signed cert
 
 If you want to run this app in your local network, edit the `example/public/javascripts/bundle.js`, search for `var ws = new WebSocket('wss:`, change the IP address, then restart the app.
 This example app works pretty well in local network(small office, home), because the data goes directly between two browsers, it's even faster than data copy using thumb-drive.
-You can also open the `example/public/javascripts/src/demo.js` to know how it works. Here is a screenshot of this app:
+You can also open the `example/public/javascripts/src/demo.js` to know how it works. Here is a running screenshot of this app:
 
 ![running demo](https://media.worksphere.cn/repo/simple-filer/demo-640.gif)
 
@@ -141,6 +142,12 @@ Fired when status changed from one value to another. There are 5 status during a
 # Built with
 
 * [Simple-peer](https://github.com/feross/simple-peer) - Simple WebRTC video/voice and data channels.
+
+# Why Chrome only
+WebRTC is a W3C standard, Firefox, Opera also support it. But one advantage of Chrome is the FileSystem API support([Exploring the FileSystem APIs](https://www.html5rocks.com/en/tutorials/file/filesystem/)).
+Data can be saved in a sanboxed file system which can only be accessed by Chrome. That means you can send file bigger than your computer memory allowed.
+Unfortunately, FileSystem API is Chrome-specific. I will consider adding support for Firefox(and nodeJS) in the future.
+
 
 # Caveats
 * This library is far from production ready, but it works well in small office, home.
