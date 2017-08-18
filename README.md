@@ -155,7 +155,7 @@ Let's say Alice want to send a bigger file to Bob. After their P2P connection ha
 
 ![workflow of message exchange](https://media.worksphere.cn/repo/simple-filer/msgExchange.png)
 
-![how chunk is sent/received](https://media.worksphere.cn/repo/simple-filer/HowChunkSentReceived.png)
+![how chunk is sent/received](https://media.worksphere.cn/repo/simple-filer/HowChunkSentReceived.png?version=2)
 
 Alice first send a meta data to Bob, containing information like: fileID(randomly generated string), fileName, fileSize, fileType.
 After receiving the meta data, Bob create a local write buffer with the same size of a chunk, then
