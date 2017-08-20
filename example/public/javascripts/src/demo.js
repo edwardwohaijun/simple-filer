@@ -20,8 +20,8 @@ filer.on('status', function({fileID, status}){
   if (status == 'done' || status == 'removed') checkQuota()
 });
 
-filer.on('error', function(err){
-  // not implemented yet
+filer.on('error', function(err){ // you need to use switch/cases to take action on each type of errors
+  console.log('err: ', err);
 });
 
 var myID, selectedPeerID, users = {}, file; // file to be sent;
@@ -91,8 +91,8 @@ function removePeer(peer){
   $('#' + peer).closest("div.radio").remove()
 }
 
-var ws = new WebSocket('wss://192.168.0.199:8443');
-//var ws = new WebSocket('wss://127.0.0.1:8443');
+//var ws = new WebSocket('wss://192.168.0.199:8443');
+var ws = new WebSocket('wss://127.0.0.1:8443');
 ws.onopen = evt => {
   filer.signalingChannel = ws;
   console.log('webSocket connected');

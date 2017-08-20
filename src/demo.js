@@ -20,8 +20,8 @@ filer.on('status', function({fileID, status}){
   if (status == 'done' || status == 'removed') checkQuota()
 });
 
-filer.on('error', function(err){
-  // not implemented yet
+filer.on('error', function(err){ // you need to use switch/cases to take action on each type of errors
+  console.log('err: ', err);
 });
 
 var myID, selectedPeerID, users = {}, file; // file to be sent;

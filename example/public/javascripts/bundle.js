@@ -77,7 +77,8 @@
 	});
 	
 	filer.on('error', function (err) {
-	  // not implemented yet
+	  // you need to use switch/cases to take action on each type of errors
+	  console.log('err: ', err);
 	});
 	
 	var myID,
@@ -142,8 +143,8 @@
 	  $('#' + peer).closest("div.radio").remove();
 	}
 	
-	var ws = new WebSocket('wss://192.168.0.199:8443');
-	//var ws = new WebSocket('wss://127.0.0.1:8443');
+	//var ws = new WebSocket('wss://192.168.0.199:8443');
+	var ws = new WebSocket('wss://127.0.0.1:8443');
 	ws.onopen = function (evt) {
 	  filer.signalingChannel = ws;
 	  console.log('webSocket connected');
@@ -212,10 +213,11 @@
 	const chunkSize = msgPayloadSize * 32;  // each chunk need to send 32 msg in a loop. This is also the memStore/buffer size to store the current chunk
 	
 	module.exports = Filer;
-	function Filer({myID, signalingChannel, webrtcConfig}){
+	function Filer({myID, signalingChannel, webrtcConfig, timeout}){
 	  this.myID = myID || '';
 	  this.signalingChannel = signalingChannel || null;
-	  this._webrtcConfig = webrtcConfig
+	  this._webrtcConfig = webrtcConfig;
+	  this._timeout = timeout || 20000; // if peer is still not connected 20s after calling createPeerConnection, consider it as failure, emit error notifying user to take further action
 	}
 	
 	Filer.prototype = new EventEmitter();
@@ -262,9 +264,15 @@
 	  });
 	
 	  p.on('error', function(err){
+	  // todo: this.emit('error', Error(....))
 	    console.log('peer error: ', err)
 	  });
 	
+	  setTimeout(() => {
+	    if (!p.connected){
+	      this.emit('error', new FilerError({name: 'PeerConnectionFailed', message: 'failed to create P2P connection with ' + p._peerID}))
+	    }
+	  }, this._timeout);
 	  return p
 	};
 	
@@ -281,8 +289,14 @@
 	};
 	
 	Filer.prototype.send = function(toWhom, fileObj){
-	  if (!fileObj) throw Error("no file selected"); // todo: use this.emit('error', Error(....));
-	  if (!toWhom) throw Error("no peer selected"); // ditto
+	  if (!fileObj) { // todo: need to run 'instanceOf'
+	    this.emit('error', new FilerError({name: 'InvalidFileObject', message: 'invalid file object'}));
+	    return
+	  }
+	  if (!toWhom) {
+	    this.emit('error', new FilerError({name: 'InvalidPeerID', message: 'invalid peer id'}));
+	    return
+	  }
 	  var fileID = randomString();
 	  var newTask = {
 	    fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
@@ -597,9 +611,9 @@
 	
 	    var isLastChunk = chunk.chunkIdx + 1 == Math.ceil(fileStat.fileSize / chunkSize );
 	    if (isLastChunk){ // each chunkSize is "msgPayloadSize * 32", but the last chunk is probably less than that, I need to grab the exact size
-	      writeFile(p, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+	      writeFile(p, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this), this.emit.bind(this));
 	    } else {
-	      writeFile(p, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+	      writeFile(p, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this), this.emit.bind(this));
 	    }
 	  }
 	};
@@ -632,32 +646,36 @@
 	      this._runTask(); // p2p connection might take few seconds to create, during that time, users might send multiple files to the same peer
 	      break; // when p2p connection established, only the first pending task get to run, we need to run the rest if there are.
 	
+	    case 5: // not implemented yet
+	      console.log('error from peers');
+	      break;
+	
 	    default:
-	      // todo: use this.emit('error', Error(....);
+	      this.emit('error', new FilerError({name: 'UnknownMessageType', message: 'unknown message type: ' + dataType + ' received from peer: ' + data.peerID}));
 	      console.log('Oops, unknown data type: ', dataType)
 	  }
 	};
 	
 	// ------------------- chrome Filesystem writing utilities
-	const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) => {
+	const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress, emit) => {
 	  if (fileObj.fileWriter) { // todo, when the whole file is done writing, remove this fileWriter on fileObj(in tasks)
-	    doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
+	    doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
 	  } else {
 	    fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(writer => {
-	      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
-	    }, err => { // any error or reject in the upstream promise chain would be handled in this block.
-	      console.log('error in promise chain: ', err);
-	      // todo: use this.emit('error', Error(....);
-	      fileObj.fileWriter = null;
+	      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
+	    }, err => { // any error or reject in the upstream promise chain would be handled here
+	      emit({name: err.name || 'FileSystemWriterError', message: err.message || 'failed to get FileSystem Writer'});
+	      fileObj.fileWriter = null; // ?????? 我觉得, err.name 还是用我自定义的较好, 我都不知道chrome会用啥name. 尤其上例, 4个async call, 任何之一出错, 我咋知道具体是哪个出错? err.name 用户不好理解.
 	    });
 	  }
 	};
 	
-	const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
+	const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) => {
 	  writer.seek( chunkIdx * chunkSize);
-	  writer.onerror = e => {
-	    console.log('Write failed: ' + e.toString());
-	    // todo: use this.emit('error', Error(....); this error might need to notify the sending peer
+	  writer.onerror = err => {
+	    console.log('Write failed: ' + err.toString());
+	    emit({name: err.name || 'FileSystemWritingError', message: err.message || 'failed to write into FileSystem'}); // ?????? 我觉得, err.name 还是用我自定义的较好, 我都不知道chrome会用啥name
+	    // todo: use this.emit('error', Error(....); sending side need to be notified of this error, otherwise, senders don't know what's going on, why transfer stopped
 	  };
 	  writer.write(new Blob([data], {type: fileObj.fileType}));
 	  writer.onwriteend = e => {
@@ -777,6 +795,21 @@
 	  });
 	};
 	
+	// ------------------ Custom Error object
+	function FilerError({name, message, nativeMessage, extraProps}){
+	  // name should be the constructor function name(FilerError in this case), but I don't want to create one constructor for one error.
+	  this.name = name || 'UnknownError';
+	  this.message = message || 'unknown error';
+	
+	  // some native error msg are hard to understand for clients, so I wrap them up with my own err name/msg, but still provide the native msg
+	  this.nativeMessage = nativeMessage;
+	  // some error(timeout for p2p connection) has other info, like: peerID, to-be-sent file List, these info are stuffed into extraProps
+	  this.extraProps = extraProps
+	}
+	FilerError.prototype = Object.create(Error.prototype);
+	FilerError.constructor = FilerError;
+	
+	// ------------------ other utilities
 	// credit: https://stackoverflow.com/questions/10726909/random-alpha-numeric-string-in-javascript
 	function randomString(length, chars) {
 	  length = length || 8;
