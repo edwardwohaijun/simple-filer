@@ -1,24 +1,51 @@
 const Peer = require('simple-peer');
-const msgPayloadSize = 64 * 1024 - 48; // msgSize: 64k, dataType: 8 bytes, chunkIdx: 8 bytes, msgIdx: 8 bytes, padding: 8 bytes, fileID: 16bytes(8 characters)
-const chunkSize = msgPayloadSize * 32;  // each chunk need to send 32 msg in a loop. This is also the memStore/buffer size to store the current chunk
+const msgPayloadSize = 64 * 1024 - 48; // msgSize of data channel: 64k, then subtract: dataType(8 bytes), chunkIdx(8 bytes), msgIdx(8 bytes), padding(8 bytes), fileID(16bytes(8 characters))
+const chunkSize = msgPayloadSize * 32; // each chunk need to send 32 msg(at most) in a loop. This is also the size of local read/write buffer to store the current chunk
 
 module.exports = Filer;
-function Filer({myID, signalingChannel, webrtcConfig}){
+function Filer({myID, signalingChannel, webrtcConfig, timeout}){
   this.myID = myID || '';
   this.signalingChannel = signalingChannel || null;
-  this._webrtcConfig = webrtcConfig
+  this._webrtcConfig = webrtcConfig; // could be null
+  this._timeout = timeout || 12; // if peer is still not connected 20s after calling createPeerConnection, consider it as failure, emit error notifying user to take further action
+
+  window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
+  this.isFileSystemAPIsupported = !!window.requestFileSystem;
 }
 
 Filer.prototype = new EventEmitter();
 //Filer.prototype = Object.create(EventEmitter.prototype); // this is not gonna work, because the EM's this.events obj is not initialised, you must use an instance of EM.
 Filer.prototype.constructor = Filer;
-
 Filer.prototype.peers = {}; // should be renamed to _peers
 Filer.prototype.tasks = []; // ditto
 
+Filer.prototype.FileSystemQuota = function(){
+    if (!this.isFileSystemAPIsupported) {
+      return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
+    }
+
+  return new Promise((resolve, reject) => {
+    navigator.webkitTemporaryStorage.queryUsageAndQuota (
+        function(usedBytes, grantedBytes){
+          resolve({
+            usedBytes: usedBytes,
+            grantedBytes: grantedBytes
+          })
+        },
+        function(err){
+          reject("error querying temporary storage quota: " + err)
+        }
+    );
+  });
+};
+
+Filer.prototype.removeAllFiles = function(){
+// next time, baby
+};
+
 Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
   var peerID = isInitiator ? answerUID : offerUID;
-  if (this.peers[peerID]){ // this.peers[peerID] is an obj which has 2 keys: peerObj and files
+  if (this.peers[peerID]){ // this.peers[peerID] is an obj with 2 properties: peerObj and files
     this.peers[peerID].peerObj = new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig});
   } else {
     this.peers[peerID] = {peerObj: new Peer({initiator: isInitiator, trickle: true, config: this._webrtcConfig})}
@@ -40,6 +67,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
   });
 
   p.on('connect', function(){
+    this.emit('connect', p._peerID);
     this._runTask()
   }.bind(this));
 
@@ -48,16 +76,31 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
   }.bind(this));
 
   p.on('close', function(){ // todo: close and error evt handler need to destroy all localBuffer, partly saved chunk and all other bookkeeping data...
+    this.emit('close', p._peerID);
   // ..., call removeTask() repeatedly to remove all associated data
-    console.log('peer is closed')
-  });
+  }.bind(this));
 
   p.on('error', function(err){
-  // todo: this.emit('error', Error(....))
-    console.log('peer error: ', err)
-  });
+    this.emit('error/peer', new FilerError({name: 'PeerError', code:"ERR_PEER_ERROR", message: 'peer(' + p._peerID + ') error: ' + err.message, peerID: p._peerID}));
+  }.bind(this));
+
+  if (p.initiator){
+    setTimeout(function(){
+      if (!p.connected){
+        this.emit('error/peer', new FilerError({name: 'PeerConnectionFailed', code:"ERR_PEER_CONNECTION_FAILED", message: 'failed to create P2P connection with ' + p._peerID, peerID: p._peerID}));
+        p.destroy()
+      }
+    }.bind(this), this._timeout * 1000);
+  }
 
   return p
+};
+
+// createConnection is a wrapper of _createPeerConnection function. Sometimes, you want to create peer connection before attempting to send a file.
+// This function returns a peer object, you can listen on its "connect" event to check whether P2P connection has established.
+// 怎样说明: A, B的连接, 只需执行createConnection一次, 仅一次, 多次反而出错
+Filer.prototype.createConnection = function(peerID){
+  return this._createPeerConnection(this.myID, peerID, true, this.signalingChannel);
 };
 
 Filer.prototype.handleSignaling = function(data){
@@ -73,8 +116,14 @@ Filer.prototype.handleSignaling = function(data){
 };
 
 Filer.prototype.send = function(toWhom, fileObj){
-  if (!fileObj) throw Error("no file selected"); // todo: use this.emit('error', Error(....));
-  if (!toWhom) throw Error("no peer selected"); // ditto
+  if (!(fileObj instanceof File)) {
+    this.emit('error/file', new FilerError({name: 'InvalidFileObject', code:"ERR_INVALID_FILE", message: 'invalid file object to send to peer: ' + toWhom, peerID: toWhom}));
+    return
+  }
+  if (toWhom == null) {
+    this.emit('error/file', new FilerError({name: 'InvalidPeerID', code:"ERR_INVALID_PEERID", message: 'invalid peer id'}));
+    return
+  }
   var fileID = randomString();
   var newTask = {
     fileID: fileID, fileName: fileObj.name, fileSize: fileObj.size, fileType: fileObj.type,
@@ -104,7 +153,6 @@ Filer.prototype.send = function(toWhom, fileObj){
 };
 
 Filer.prototype.removeTask = function(fileID){
-// todo: peer's close/error evt handler must call removeTask
 // removeTask() is called either by user clicking the 'remove' button, or receiving the 'removeReq' peer msg
 // 2 pieces of data need to be removed for file sender: item in tasks array, object on this.peers.peerID.files.sending.fileID
 // 3 pieces of data need to be removed for file receiver: ...................array buffer on ..................receiving.fileID, and written chunk in chrome FileSystem
@@ -136,7 +184,7 @@ Filer.prototype.removeTask = function(fileID){
   this._updateStatus({fileID: fileID, status: 'removed'}); // must call this before the following tasks.splice, otherwise, the task is gone
 
   var taskIdx = this.tasks.indexOf(fileStat);
-  if (taskIdx != -1){ // redundant ???
+  if (taskIdx !== -1){ // redundant ???
     this.tasks.splice(taskIdx, 1);
   }
 };
@@ -144,17 +192,17 @@ Filer.prototype.removeTask = function(fileID){
 Filer.prototype._runTask = function(){
   var t;
   for(let i = 0; i < this.tasks.length; i++) {
-    if (this.tasks[i].status == 'pending') { // _runTask only run when p2p connection is established, thus when status is always pending, it means p2p connection failed
+    if (this.tasks[i].status === 'pending') { // _runTask only run when p2p connection is established, thus when status is always pending, it means p2p connection failed
       this.tasks[i].status = '_running'; // the 'pending' status is soon to be updated by _sendChunk(and _saveChunk), but before that happened, there is a chance ...
       t = this.tasks[i]; // ... user click 'send' again, that causes the same 'pending' task to run again. Thus, setting to '_running' prevent that case....
       break; // ..., another approach is to use this.tasks.unshift(newTask) instead of this.tasks.push()
     }
   }
   if (t) {
-    if (t.from == this.myID) { // I'm the file sender
+    if (t.from === this.myID) { // I'm the file sender
       var fileInfo = {id: t.fileID, size: t.fileSize, name: t.fileName, type: t.fileType, to: t.to};
       this.peers[fileInfo.to].peerObj.send( makeFileMeta(fileInfo) )
-    } else if (t.to == this.myID){ // I'm the file receiver
+    } else if (t.to === this.myID){ // I'm the file receiver
       console.log('receiving file now, wait for fileMeta');
     } else {
       console.log('Oops, not supposed to happen')
@@ -189,7 +237,7 @@ function makeFileMeta(fileInfo){
 
   var fileName = new Uint16Array(buf, 48, 64);
   for(let i=0; i<fileName.length; i++){
-    if (i == fileInfo.name.length) break;
+    if (i === fileInfo.name.length) break;
     fileName[i] = fileInfo.name.charCodeAt(i)
   }
 
@@ -197,7 +245,7 @@ function makeFileMeta(fileInfo){
 
   var fileType = new Uint16Array(buf, 192);
   for(let i = 0; i<fileType.length; i++){
-    if (i == fileInfo.type.length) break;
+    if (i === fileInfo.type.length) break;
     fileType[i] = fileInfo.type.charCodeAt(i)
   }
 
@@ -282,7 +330,7 @@ function parseReceivedNotice(data){ // this is technically the same as parseRemo
 Filer.prototype._processFileMeta = function(data){
   var fileInfo = parseFileMeta(data.data);
   if (!this.peers[data.peerID].files.receiving[ fileInfo.id ]){
-    this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create local buffer for incoming file chunk data
+    this.peers[data.peerID].files.receiving[ fileInfo.id ] = new Uint8Array( chunkSize ); // create local write buffer for incoming chunk data
   }
   var newTask = {
     fileID: fileInfo.id, fileName: fileInfo.name.substr(0, fileInfo.nameLength),
@@ -384,14 +432,14 @@ Filer.prototype._saveChunk = function(data) { // actually, it should be named _s
   }
 
   const maxMsgCount = chunkSize / msgPayloadSize;
-  if (chunk.msgIdx + 1 == maxMsgCount
-      || chunk.msgIdx + chunk.chunkIdx * maxMsgCount == Math.floor(fileStat.fileSize / msgPayloadSize) ){
+  if (chunk.msgIdx + 1 === maxMsgCount
+      || chunk.msgIdx + chunk.chunkIdx * maxMsgCount === Math.floor(fileStat.fileSize / msgPayloadSize) ){
 
-    var isLastChunk = chunk.chunkIdx + 1 == Math.ceil(fileStat.fileSize / chunkSize );
+    var isLastChunk = chunk.chunkIdx + 1 === Math.ceil(fileStat.fileSize / chunkSize );
     if (isLastChunk){ // each chunkSize is "msgPayloadSize * 32", but the last chunk is probably less than that, I need to grab the exact size
-      writeFile(p, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+      writeFile(p, receivingBuffer.slice(0, chunk.msgIdx * msgPayloadSize + chunk.data.length), chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this), this.emit.bind(this));
     } else {
-      writeFile(p, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this));
+      writeFile(p, receivingBuffer, chunk.chunkIdx, fileStat, isLastChunk, this._updateProgress.bind(this), this.emit.bind(this));
     }
   }
 };
@@ -424,32 +472,45 @@ Filer.prototype._parseData = function(data){
       this._runTask(); // p2p connection might take few seconds to create, during that time, users might send multiple files to the same peer
       break; // when p2p connection established, only the first pending task get to run, we need to run the rest if there are.
 
+    case 5: // not implemented yet
+      console.log('error from peers');
+      break;
+
     default:
-      // todo: use this.emit('error', Error(....);
+      this.emit('error/file', new FilerError({
+        name: 'UnknownMessageType', code:"ERR_UNKNOWN_MESSAGE_TYPE", message: 'unknown message type: ' + dataType + ' received from peer: ' + data.peerID,
+        peerID: data.peerID, fileID: fileID
+      }));
       console.log('Oops, unknown data type: ', dataType)
   }
 };
 
-// ------------------- chrome Filesystem writing utilities
-const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress) => {
+// ------------------- Chrome Filesystem writing utilities
+const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress, emit) => {
   if (fileObj.fileWriter) { // todo, when the whole file is done writing, remove this fileWriter on fileObj(in tasks)
-    doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
+    doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
   } else {
     fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(writer => {
-      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress);
-    }, err => { // any error or reject in the upstream promise chain would be handled in this block.
-      console.log('error in promise chain: ', err);
-      // todo: use this.emit('error', Error(....);
+      doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
+    }, err => {
+      emit('error/file', new FilerError({
+        name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR",  message: err.message || 'failed to get FileSystem Writer',
+        peerID: peer._peerID, fileID: fileObj.fileID
+      }));
       fileObj.fileWriter = null;
     });
   }
 };
 
-const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress) => {
+const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) => {
   writer.seek( chunkIdx * chunkSize);
-  writer.onerror = e => {
-    console.log('Write failed: ' + e.toString());
-    // todo: use this.emit('error', Error(....); this error might need to notify the sending peer
+  writer.onerror = err => {
+    console.log('Write failed: ' + err.toString());
+    emit('error/file', new FilerError({
+      name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR", message: err.message || 'failed to write into ChromeFileSystem',
+      peerID: peer._peerID, fileID: fileObj.fileID
+    }));
+    // todo: sending side need to be notified of this error, otherwise, senders don't know what's going on, why transfer stopped
   };
   writer.write(new Blob([data], {type: fileObj.fileType}));
   writer.onwriteend = e => {
@@ -467,8 +528,7 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updatePro
   }; // even if error occurred during write(), onwriteend still got fired, causing the wrong seek value
 };
 
-// ------------------------- chrome filesystem API(Promise wrapper)
-window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
+// ------------------------- Chrome filesystem API(Promise wrapper)
 
 const fs = fileObj => {
   return new Promise(function (resolve, reject) {
@@ -476,7 +536,8 @@ const fs = fileObj => {
         ({root}) => {
           resolve({root:root, fileObj: fileObj})
         },
-        reject);
+        err => reject(err)
+    );
   });
 };
 
@@ -495,7 +556,9 @@ const fileExists = ({root, fileObj}) => {
               //console.log(err.name);
               if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // chrome 54's err.name is NotFoundError, prior version use: NOT_FOUND_ERR
                 resolve({root:root, fileObj: fileObj});
-              } else reject(err)
+              } else {
+                reject(err)
+              }
             }
     );
   })
@@ -569,6 +632,19 @@ EventEmitter.prototype.once = function (event, listener) {
   });
 };
 
+// ------------------ Custom Error object
+function FilerError({name, code, message, peerID, fileID}){
+  // name should be the constructor function name(FilerError in this case), but I don't want to create one constructor for one error.
+  this.name = name || 'UnknownError';
+  this.code = code;
+  this.message = message || 'unknown error';
+  this.peerID = peerID;
+  this.fileID = fileID;
+}
+FilerError.prototype = Object.create(Error.prototype);
+FilerError.constructor = FilerError;
+
+// ------------------ other utilities
 // credit: https://stackoverflow.com/questions/10726909/random-alpha-numeric-string-in-javascript
 function randomString(length, chars) {
   length = length || 8;
