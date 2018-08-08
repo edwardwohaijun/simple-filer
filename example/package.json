@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "start": "node ./app.js"
+    "start": "node ./app.js",
+    "build": "webpack --mode development --config webpack.config.js --progress"
   },
   "dependencies": {
     "body-parser": "~1.13.2",
@@ -14,5 +15,11 @@
     "morgan": "~1.6.1",
     "serve-favicon": "~2.3.0",
     "ws": "^3.0.0"
+  },
+  "devDependencies": {
+    "webpack": "^4.16.5",
+    "webpack-cli": "^3.1.0",
+    "babel-loader": "^7.1.5",
+    "babel-core": "^6.26.3"
   }
 }
