@@ -8,42 +8,46 @@ npm install simple-filer
 ```
 # Prerequisites
 * Chrome browser
-* WebServer running on TLS with WebSocket support
+* Web Server with WebSocket support
 
 # Usage
 ## server side
-WebRTC needs a signaling server to exchange some meta data between peers before peers can talk to each other directly.
+WebRTC needs a signaling server to exchange some meta data between peers before they can talk to each other directly.
 The regular approach is to use WebSocket. The following snippet uses nodeJS as an example:
 ```javascript
-var users = {} // online users with key as userID, value as socket
+var users = {}; // online users with key as userID, value as socket, data populated by your app
+var express = require('express');
+var app = express();
+var httpServer = require('http').createServer(app);
+httpServer.listen(8000);
+
 const WebSocket = require('ws');
 const wss = new WebSocket.Server({
-  server: httpsServer
+  server: httpServer
 });
 
-wss.on('connection', function(ws){
-  ws.on('message', msg => {
+wss.on('connection', function(socket){
+  socket.on('message', msg => {
     var msgObj = JSON.parse(msg);
 
     switch (msgObj.msgType) {
       case "signaling":
         var targetClient = users[msgObj.to];
-        targetClient.send(msg) // forward the signaling data to the specified user
+        targetClient.send(msg); // forward the signaling data to the specified user
         break;
       default: console.log('Oops, unknown msg: ', msgObj)
     }
   });
 })
 ```
-All you need to do is assign a message handler for `ws.onmessage`, `JSON.parse` the message, if the `msgObj.msgType` is `signaling`,
-send the whole message to whoever `msgObj.to` is.
+All you need to do is assign a message handler for `socket.on("message", msgHandler)`, `JSON.parse` the message, if the `msgObj.msgType` is `signaling`,
+send the whole message to whoever `msgObj.to` points to.
 
 ## client side
 ```javascript
-var ws = new WebSocket('wss://127.0.0.1:8443');
-
-var Filer = require('simple-filer')
-var filer = new Filer({myID: 123, signalingChannel: ws})
+var ws = new WebSocket('ws://127.0.0.1:8000');
+var Filer = require('simple-filer');
+var filer = new Filer({myID: 123, signalingChannel: ws});
 
 ws.onmessage = msg => {
   var msgObj = JSON.parse(msg.data);
@@ -54,8 +58,8 @@ ws.onmessage = msg => {
   }
 };
 
-filer.on('task', function(task) { // when you are about to send/receive a file, task event is fired
-  console.log('new task: ', task); // this is where you can add task info on the webpage
+filer.on('task', function(task) { // when you are about to send/receive a file, task event is fired,
+  console.log('new task: ', task); // this is where you can add file info on the webpage
 });
 
 filer.on('progress', function({fileID, progress, fileName, fileURL}){ // file transfer progress event
@@ -73,29 +77,33 @@ cd node_modules/simple-filer/example
 npm install
 npm run start
 ```
-Open Chrome browser, go to `https://127.0.0.1:8443`(It's httpS). The first time you open this address, Chrome would show you a 'not secure' message.
-That's because WebRTC requires WebServer to run on TLS, and I use a self-signed certificate.
+Open 2 Chrome tabs, go to `http://127.0.0.1:8000`, try to send files to each other.
 
-If you want to run this app in your local network, edit the `example/public/javascripts/bundle.js`, search for `var ws = new WebSocket('wss:`, change the IP address, then restart the app.
+If you want to run this app in your local network, edit `example/public/javascripts/bundle.js`, search for `ws://127.0.0.1:8000`, change the IP address, then refresh the page.
 This example app works pretty well in local network(small office, home), because the data go directly between two browsers, it's even faster than data copy using thumb-drive.
-You can also open the `example/public/javascripts/src/demo.js` to know how it works. Here is a running screenshot of this app:
+You can open `example/public/javascripts/src/demo.js` to know how it works. Here is a running screenshot of this app:
 
 ![running demo](https://media.worksphere.cn/repo/simple-filer/demo-640.gif)
 
 
 ## API
+### constructor
 ```javascript
-var filer = new Filer({myID: 123, signalingChannel: ws, webrtcConfig: configObject})
+var Filer = require('simple-filer');
+var filer = new Filer({myID: 123, signalingChannel: ws, webrtcConfig: configObject, timeout: 12})
 ```
-Create a new filer object(you should only create one such object in your web app).
+(You should only create one `filer` object in your web app.)
 
-`myID` is current user's ID provided by your application. `signalingChannel` is what WebRTC needs to exchange meta data between peers. Usually, you can pass a connected WebSocket client.
-`webrtcConfig` is optional, passed to the underlying SimplePeer(an excellent WebRTC library) constructor. This argument should be like:
+* `myID` current user's ID provided by your application
+* `signalingChannel`- WebRTC needs this channel to exchange meta data between peers. Usually, you can pass a connected WebSocket client.
+* `timeout` is how long it'd take making P2P connection before giving up. 
+* `webrtcConfig` is optional, passed to the underlying SimplePeer(an excellent WebRTC library) constructor. This argument should be like:
 ```
 {iceServers: [{url: 'stun:stun.l.google.com:19302'}, {url: 'turn:SERVERIP:PORT', credential: 'secret', username: 'username'}, ...]}
 ```
-SimplePeer already provides a default value for this argument, so you don't need to provide one.
+SimplePeer already provides a default value for this argument, so you don't need one. 
 
+### handleSignaling
 ```
 filer.handleSignaling(message)
 ```
@@ -106,44 +114,104 @@ Call this method when your WebSocket client has received a signaling message. Th
 * `signalingData` - signaling data generated by underlying WebRTC
 
 You don't need to compose this message yourself, you just call `filer.send()`, everything is done for you.
+
+### send
 ```
 filer.send(receiverUID, file)
 ```
 * `receiverUID` - the targeting user you want to send the file, UID is provided by your application
 * `file` - the html file object.
-After calling `filer.send()`, a new task is created for both sender and receiver.
+After calling `filer.send()`, a new task event is fired for both sender and receiver. See `Events` section for further details
+
+### createConnection
+```javascript
+filer.createConnection(peerID)
 ```
-filer.removeTask(taskID)
+Sometimes, you want to make sure the P2P connection is established before attempting to send a file.
+This function tries to create the connection, you need to listen on:
+```javascript
+filer.on('connect', function(peerID){ console.log("peer with ID: ", peerID, " connected") })
 ```
-When the file is received and saved successfully, you can choose to remove it by calling `removeTask()`.
+See `Events` section for further details. 
+
+### removeTask
+```
+filer.removeTask(fileID)
+```
+When the file is received and saved successfully, you can choose to remove it by calling `removeTask(fileID)`.
 It's recommended to call this method after you have saved the file in your hard drive, otherwise it'd take unnecessary space.
 
-## Events
+### FileSystemQuota
 ```
-filer.on('task', function(taskData){})
+filer.FileSystemQuota()
+  .then(({usedBytes, grantedByte}) => {console.log("used/granted", usedBytes, "/", grantedBytes})
+  .catch(err => {console.log("err querying filesystem quota")})
+```
+This function returns a `Promise` with an object of 2 properties after resolving: `{usedBytes, grantedBytes}`,
+As their name suggest, `usedBytes` is the size of all received files, `grantedBytes` is the total size you can use.
+Chrome FileSystem is a sandboxed filesystem only accessible by Chrome browsers. As a file receiver, you need to make sure
+the size of all incoming files don't exceed `grantedBytes - usedBytes`.
+
+### isFileSystemAPIsupported
+```
+filer.isFileSystemAPIsupported
+```
+This is a bool property showing whether the client browser support FileSystem API(currently only Chrome does).
+You might want to check this value to notify users to switch browser.
+
+## Events
+### task
+```
+filer.on('task', function(taskData){ // add taskData on page})
 ```
 Fired when you call `filer.send()` or when file receiver received a message about the incoming file.
-This is the moment you could add a html table row with the taskData.
+This is the moment you add a html table row with the taskData. The taskData object has the following properties:
+```javascript
+{
+  fileID, // randomly generated string
+  fileName, fileSize, fileType, // self explained
+  progress, // file transfer progress, at this moment it's 0. 
+  from, to, // file sender's userID, file receiver's userID, both are provided by your app. 
+  status // possible values are: pending/sending/receiving/done/removed
+}
 ```
-filer.on('progress, function({fileID, progress, fileName, fileURL}){})
+
+### progress
+```
+filer.on('progress, function({fileID, progress, fileName, fileURL}){ // update transfer progress})
 ```
 Fired when part of the file has been sent/received. You can use this event to show a progress bar.
-When the `progress` value hits 1 at receiving side, you can generate a link with `fileName` and `fileURL`.
+When the `progress` value hits 1 at receiving side, you can generate a link with `fileName` and `fileURL`(sender has no `fileURL`).
 
+### status
 ```
 filer.on('status', function({fileID, status}){})
 ```
-Fired when status changed from one value to another. There are 5 status during a file transfer:
+Fired when status changed. There are 5 possible values during a file transfer:
 * `pending` - wait for P2P connection to be established
 * `sending` - file is sending
 * `receiving` - file is receiving
 * `done` - file is done sending or receiving
-* `removed` - `filer.removeTask()` is called, all the underlying data is removed
+* `removed` - `filer.removeTask(fileID)` is called, all the underlying file data is removed
 
-# Why Chrome only
-WebRTC is a W3C standard, Firefox, Opera also support it. But one advantage of Chrome is the FileSystem API support([Exploring the FileSystem APIs](https://www.html5rocks.com/en/tutorials/file/filesystem/)).
-Data can be saved in a sanboxed file system which can only be accessed by Chrome. That means you can send/receive files bigger than your computer memory allowed.
-Unfortunately, FileSystem API is Chrome-specific. I will consider adding support for Firefox(and nodeJS) in the future.
+### error/peer
+```
+filer.on('error/peer', ({name, code, message, peerID}) => {})
+```
+Fired when peer-related errors occur, you'd better do a switch case on `code`, possible values are:
+* `ERR_PEER_ERROR` - network disconnected 
+* `ERR_PEER_CONNECTION_FAILED` - fail to create P2P connection due to timeout   
+
+### error/file
+```
+filer.on('error/file', ({name, code, message, peerID, fileID}) => {})
+```
+Fired when file-transfer related errors occur, you'd better do a switch case on `code`, possible values are:
+* `ERR_INVALID_PEERID` - the first peerID argument you pass to `filer.send(toWhom, fileObj)` is empty or null 
+* `ERR_INVALID_FILE` - the second file argument you pass to `filer.send(toWhom, fileObj)` is not a html file object
+* `ERR_UNKNOWN_MESSAGE_TYPE` - normally, this occurs when one browser is not Chrome
+* `ERR_CHROME_FILESYSTEM_ERROR` - fail to read/write data from/to Chrome Filesystem, this occurs when you clear the browser cache during file receiving, 
+remove the file when it's receiving, or you have exceeded your available Chrome Filesystem space.
 
 # How does it work
 
@@ -151,7 +219,7 @@ First, each file, no matter its size, is sent/received in multiple chunks. Each 
 And the data is sent via data channel, the Chrome implementation of WebRTC allow the maximum message size in data channel to be 64k.
 So, file senders need to run a loop of 32 iterations at most to send the whole chunk.
 
-Let's say Alice want to send a bigger file to Bob. After their P2P connection has been established. The whole process can be illustrated as the following 2 diagrams:
+Let's say Alice want to send a bigger file to Bob. After their P2P connection has been established. The whole process can be illustrated in the following 2 diagrams:
 
 ![workflow of message exchange](https://media.worksphere.cn/repo/simple-filer/msgExchange.png)
 
@@ -161,8 +229,50 @@ Alice first send a meta data to Bob, containing information like: fileID(randoml
 After receiving the meta data, Bob create a local write buffer with the same size of a chunk, then
 send the request for first chunk. Alice received the request, read the first chunk of the file into her local read buffer,
 run a loop to send the whole chunk. When Bob received each piece of the chunk, he append them into his local write buffer first.
-When his write buffer is full, he write the whole buffer into Chrome FileSystem, when the write is finished, Bob send the
+When the write buffer is full, he write the whole buffer into Chrome FileSystem, when the write is finished, Bob send the
 request for the next chunk if this is not the last one.
+
+# FAQ
+## Can I use socket.io as signaling channel
+Yes, you can pass a wrapper object to `Filer` constructor, like this:
+```javascript
+signalingChan = {
+  socket: socket, // this is the socket.io client object
+  send: function(data){
+    this.socket.emit("signaling", data)
+  },
+};
+var filer = new Filer({myID: 123, signalingChannel: signalingChan});
+```
+
+In your event handler function
+```javascript
+socket.on("signaling", function(signalingData){
+  let signalingObj = JSON.parse(signalingData);
+  filer.handleSignaling(signalingObj)
+})
+```
+
+And your socket.io server should listen on `signaling` event, like this:
+```javascript
+let users = {}; // all online users, key is userID, value is socket object, populated by your app.
+io.on('connection', function(socket){
+  socket.on('signaling', function(signalingData){
+    let signalingObj = JSON.parse(signalingData);
+    let targetingUser = users[signalingObj.to]; // signalingObj.to is the ID of targeting user
+    targetingUser.emit("signaling", signalingData)
+  });
+});
+```
+
+## Why Chrome only
+WebRTC is a W3C standard, Firefox, Opera also support it(even Safari 11+ support it). But one advantage of Chrome is the FileSystem API support([Exploring the FileSystem APIs](https://www.html5rocks.com/en/tutorials/file/filesystem/)).
+Data can be saved in a sanboxed file system which can only be accessed by Chrome. That means you can receive files bigger than your computer memory allowed.
+Unfortunately, FileSystem API is Chrome-specific. I will consider adding support for Firefox/Safari in the future. 
+But that mean it has to be a filesize limit. 
+
+## Does it support NodeJS?
+No for this moment, but technically, it can, and may require many time and effort. And I don't have any timeline to add NodeJS support.   
 
 # Built with
 
@@ -178,7 +288,7 @@ JavaScript is not very efficient at handling binary data.
 When a file is in receiving, removing it might cause an error(refer to #1).
 
 Besides, I have a personal chat web app([http://worksphere.cn/home](http://worksphere.cn/home), no registration needed).
-I also created a dedicated discussion group in my chat app for this project. If you have more issues or suggestions, just go in there.
+I also created a dedicated discussion group in my chat app for this project. If you have more issues or suggestions, just go there.
 
 
 # License
