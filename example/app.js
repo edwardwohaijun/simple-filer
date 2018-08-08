@@ -3,7 +3,7 @@ var path = require('path');
 var logger = require('morgan');
 var cookieParser = require('cookie-parser');
 var bodyParser = require('body-parser');
-var fs = require('fs');
+// var fs = require('fs');
 var routes = require('./routes/index');
 var crypto = require('crypto');
 
@@ -17,17 +17,18 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-var privateKey = fs.readFileSync('ssl/key.pem', 'utf8');
-var certificate = fs.readFileSync('ssl/cert.pem', 'utf8');
-var credentials = {key: privateKey, cert: certificate};
-var httpsServer = require('https').createServer(credentials, app);
-httpsServer.listen(8443, function(){
-  console.log('server started on port: 8443.')
-});
+// var privateKey = fs.readFileSync('ssl/key.pem', 'utf8');
+// var certificate = fs.readFileSync('ssl/cert.pem', 'utf8');
+// var credentials = {key: privateKey, cert: certificate};
+
+var httpServer = require('http').createServer(app);
+// var httpsServer = require('https').createServer(credentials, app);
+httpServer.listen(8000);
+// httpsServer.listen(8443, function(){ console.log('server started on port: 8443.') });
 
 const WebSocket = require('ws');
 const wss = new WebSocket.Server({
-  server: httpsServer,
+  server: httpServer,
   clientTracking: true   // to store all connected clients in a set, so you can run forEach on them.
 });
 
@@ -130,6 +131,5 @@ app.use(function(err, req, res, next) {
     error: {}
   });
 });
-
 
 module.exports = app;
