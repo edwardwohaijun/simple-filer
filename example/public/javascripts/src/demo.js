@@ -17,11 +17,39 @@ filer.on('progress', function({fileID, progress, fileName, fileURL}){
 filer.on('status', function({fileID, status}){
   var statusTD = $("#status-" + fileID);
   statusTD.text(status);
-  if (status == 'done' || status == 'removed') checkQuota()
+  if (status === 'done' || status === 'removed') checkQuota()
 });
 
-filer.on('error', function(err){ // you need to use switch/cases to take action on each type of errors
-  console.log('err: ', err);
+filer.on('error/peer', function(err){
+  switch (err.code){
+    case "ERR_PEER_ERROR": // the remote peer has closed the browser, lost network connection, stuff like that
+      console.log('peer err: ', err.message); // if you are the file receiver, you have to ask file sender to re-establish P2P connection, and re-send the file.
+      break;
+    case "ERR_PEER_CONNECTION_FAILED": // failed to make P2P connection due to timeout(default is 12seconds, could be overridden by passing a timeout property to Filer constructor)
+      console.log('peer connection error: ', err.message);
+      break;
+    default:
+      console.log("Unknown peer error: ", err);
+  }
+});
+
+filer.on('error/file', function(err){
+  switch (err.code) {
+    case "ERR_INVALID_PEERID": // you are calling filer.send() with an empty or null peerID
+      console.log('invalid peerID', err.message);
+      break;
+    case "ERR_INVALID_FILE": // You are calling filer.send() with an invalid file object
+      console.log('InvalidFileObject: ', err.message);
+      break;
+    case "ERR_UNKNOWN_MESSAGE_TYPE": // probably due to one side is using a non-Chrome browser, but I have done some checking to prevent that, thus I don't think this error would occur
+      console.log("unknown data type", err.message);
+      break;
+    case "ERR_CHROME_FILESYSTEM_ERROR": // probably due to that you have exceeded your filesystem quota(your hard disk is almost full), or you are clearing browser cache during file receiving
+      console.log("chrome FS error: ", err.message);
+      break;
+    default:
+    console.log('unknown file error: ', err)
+  }
 });
 
 var myID, selectedPeerID, users = {}, file; // file to be sent;
@@ -36,6 +64,10 @@ $("#startTransfer").click(function(){
   filer.signalingChannel = ws;
   filer.send(selectedPeerID, file)
 });
+if (!filer.isFileSystemAPIsupported) {
+  $("#non-chrome-warning").text("Please use Chrome");
+  $("#startTransfer").attr("disabled", "disabled");
+}
 
 $("#peerListContainer").on('change', 'input:radio[name="peerList"]', function(){
   selectedPeerID = $(this).val();
@@ -46,14 +78,18 @@ $("#taskList").on('click', '.removeTask', function(e){
 });
 
 function checkQuota(){
-  navigator.webkitTemporaryStorage.queryUsageAndQuota (
-      function(usedBytes, grantedBytes){
-        $("#fileSystemQuota").text("Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)");
-      },
-      function(err){
-        console.log('Error querying temporary storage: ', err)
-      }
-  );
+  if (!filer.isFileSystemAPIsupported) {
+    $("#fileSystemQuota").text("Your browser doesn't support Filesystem API, please use Chrome.");
+    return
+  }
+
+  filer.FileSystemQuota()
+      .then(function({usedBytes, grantedBytes}){
+        var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.)</div>";
+        $("#fileSystemQuota").html(div1Content + div2Content);
+      })
+      .catch(err => console.log("err checking quota: ", err));
 }
 checkQuota();
 
@@ -91,8 +127,7 @@ function removePeer(peer){
   $('#' + peer).closest("div.radio").remove()
 }
 
-//var ws = new WebSocket('wss://192.168.0.199:8443');
-var ws = new WebSocket('wss://127.0.0.1:8443');
+var ws = new WebSocket('ws://127.0.0.1:8000');
 ws.onopen = evt => {
   filer.signalingChannel = ws;
   console.log('webSocket connected');
