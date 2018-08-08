@@ -24,7 +24,7 @@ Filer.prototype.FileSystemQuota = function(){
       return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
     }
 
-  return new Promise((resolve, reject) => {
+  return new Promise(function(resolve, reject){
     navigator.webkitTemporaryStorage.queryUsageAndQuota (
         function(usedBytes, grantedBytes){
           resolve({
@@ -120,8 +120,8 @@ Filer.prototype.send = function(toWhom, fileObj){
     this.emit('error/file', new FilerError({name: 'InvalidFileObject', code:"ERR_INVALID_FILE", message: 'invalid file object to send to peer: ' + toWhom, peerID: toWhom}));
     return
   }
-  if (toWhom == null) {
-    this.emit('error/file', new FilerError({name: 'InvalidPeerID', code:"ERR_INVALID_PEERID", message: 'invalid peer id'}));
+  if (toWhom == null || toWhom === "") {
+    this.emit('error/file', new FilerError({name: 'InvalidPeerID', code:"ERR_INVALID_PEERID", message: 'invalid peer id', peerID: null}));
     return
   }
   var fileID = randomString();
@@ -486,13 +486,13 @@ Filer.prototype._parseData = function(data){
 };
 
 // ------------------- Chrome Filesystem writing utilities
-const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress, emit) => {
+const writeFile = function(peer, data, chunkIdx, fileObj, isLastChunk, updateProgress, emit){
   if (fileObj.fileWriter) { // todo, when the whole file is done writing, remove this fileWriter on fileObj(in tasks)
     doWriting(fileObj.fileWriter, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
   } else {
-    fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(writer => {
+    fs(fileObj).then(fileExists).then(getFile).then(getFileWriter).then(function(writer) {
       doWriting(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit);
-    }, err => {
+    }, function(err) {
       emit('error/file', new FilerError({
         name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR",  message: err.message || 'failed to get FileSystem Writer',
         peerID: peer._peerID, fileID: fileObj.fileID
@@ -502,9 +502,9 @@ const writeFile = (peer, data, chunkIdx, fileObj, isLastChunk, updateProgress, e
   }
 };
 
-const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) => {
+const doWriting = function(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) {
   writer.seek( chunkIdx * chunkSize);
-  writer.onerror = err => {
+  writer.onerror = function(err) {
     console.log('Write failed: ' + err.toString());
     emit('error/file', new FilerError({
       name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR", message: err.message || 'failed to write into ChromeFileSystem',
@@ -513,7 +513,7 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updatePro
     // todo: sending side need to be notified of this error, otherwise, senders don't know what's going on, why transfer stopped
   };
   writer.write(new Blob([data], {type: fileObj.fileType}));
-  writer.onwriteend = e => {
+  writer.onwriteend = function(e) {
     if (isLastChunk){
       var url = 'filesystem:' + window.location.protocol + '//' + window.location.hostname;
       var port = window.location.port ? ':' + window.location.port : '';
@@ -530,28 +530,30 @@ const doWriting = (writer, fileObj, peer, chunkIdx, data, isLastChunk, updatePro
 
 // ------------------------- Chrome filesystem API(Promise wrapper)
 
-const fs = fileObj => {
+const fs = function(fileObj) {
   return new Promise(function (resolve, reject) {
     window.requestFileSystem(window.TEMPORARY, 4*1024*1024*1024,
-        ({root}) => {
+        function({root}){
           resolve({root:root, fileObj: fileObj})
         },
-        err => reject(err)
+        function(err) {
+          reject(err)
+        }
     );
   });
 };
 
-const fileExists = ({root, fileObj}) => {
+const fileExists = function({root, fileObj}){
   return new Promise(function(resolve, reject) {
     root.getFile(fileObj.fileName, {create: false}, // the point is not to get the fileEntry, but check whether the file with fileName already exists, thus use "create: false"
-            fileEntry => {
+            function(fileEntry) {
               var filename = fileObj.fileName.substring(0, fileObj.fileName.lastIndexOf('.'));
               var ext = fileObj.fileName.substring(fileObj.fileName.lastIndexOf('.'));
               var randomStr = randomString(); // if the file with fileName already exists, append the new filename with _randomStr ...
               fileObj.fileName = filename + '_' + randomStr + ext; // ... and file extension
               resolve({root:root, fileObj: fileObj});
             },
-            err => { // NOT_FOUND_ERR(or NotFoundError) occurred when the file with fileName doesn't exist...
+            function(err) { // NOT_FOUND_ERR(or NotFoundError) occurred when the file with fileName doesn't exist...
               // ..., but in my case, this is not an error, so I call resolve(), only other type of errors need to call reject(err)
               //console.log(err.name);
               if (err.name === 'NOT_FOUND_ERR' || err.name === 'NotFoundError'){ // chrome 54's err.name is NotFoundError, prior version use: NOT_FOUND_ERR
@@ -564,28 +566,40 @@ const fileExists = ({root, fileObj}) => {
   })
 };
 
-const getFile = ({root, fileObj}) => { // create the file and return its fileEntry obj
+const getFile = function({root, fileObj}) { // create the file and return its fileEntry obj
   return new Promise(function(resolve, reject){
-    root.getFile(fileObj.fileName, {create:true}, fileEntry => {
-      resolve({fileEntry: fileEntry, fileObj: fileObj});
-    }, err => reject(err))
+    root.getFile(fileObj.fileName, {create:true},
+        function(fileEntry) {
+          resolve({fileEntry: fileEntry, fileObj: fileObj});
+        },
+        function(err) {
+          reject(err)
+        })
   })
 };
 
-const getFileWriter = ({fileEntry, fileObj}) => {
+const getFileWriter = function({fileEntry, fileObj}) {
   return new Promise(function(resolve, reject){
-    fileEntry.createWriter(fileWriter => {
-      fileObj.fileWriter = fileWriter;
-      resolve(fileWriter)
-  }, err => reject(err))
+    fileEntry.createWriter(
+        function(fileWriter) {
+          fileObj.fileWriter = fileWriter;
+          resolve(fileWriter)
+        },
+        function(err){
+          reject(err)
+        })
   })
 };
 
-const removeFile =  ({fileEntry}) => { // fs(fileObj).then(getFile).then(removeFile), fileObj must have a fileName property
+const removeFile = function({fileEntry}) { // fs(fileObj).then(getFile).then(removeFile), fileObj must have a fileName property
   return new Promise(function(resolve, reject){
-    fileEntry.remove(()=>{
-      resolve('success')
-    }, err => reject(err))
+    fileEntry.remove(
+        function() {
+          resolve()
+        },
+        function(err){
+          reject(err)
+        })
   })
 };
 
@@ -636,7 +650,7 @@ EventEmitter.prototype.once = function (event, listener) {
 function FilerError({name, code, message, peerID, fileID}){
   // name should be the constructor function name(FilerError in this case), but I don't want to create one constructor for one error.
   this.name = name || 'UnknownError';
-  this.code = code;
+  this.code = code || 'ERR_UNKNOWN_ERROR';
   this.message = message || 'unknown error';
   this.peerID = peerID;
   this.fileID = fileID;
