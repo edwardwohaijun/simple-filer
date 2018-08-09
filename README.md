@@ -128,9 +128,15 @@ After calling `filer.send()`, a new task event is fired for both sender and rece
 filer.createConnection(peerID)
 ```
 Sometimes, you want to make sure the P2P connection is established before attempting to send a file.
-This function tries to create the connection, you need to listen on:
+This function tries to create the connection. If Alice call `filer.createConnection(Bob)`, 
+then Bob should NOT call `filer.createConnection(Alice)`. In WebRTC term, there should be only one offerer(Alice), 
+one answerer(Bob). To check whether connection is established or not, they both need to listen on:
 ```javascript
 filer.on('connect', function(peerID){ console.log("peer with ID: ", peerID, " connected") })
+```
+and
+```javascript
+filer.on('error/peer')
 ```
 See `Events` section for further details. 
 
