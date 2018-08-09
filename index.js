@@ -145,9 +145,9 @@ Filer.prototype.send = function(toWhom, fileObj){
   if (p && p.connected){
     this._runTask();
   } else if (p){
-    console.log('p exist, but not ready, just wait');
+    //console.log('p exist, but not ready, just wait');
   } else {
-    console.log('p does not exist, create it now');
+    //console.log('p does not exist, create it now');
     this._createPeerConnection(this.myID, toWhom, true, this.signalingChannel);
   }
 };
@@ -203,7 +203,7 @@ Filer.prototype._runTask = function(){
       var fileInfo = {id: t.fileID, size: t.fileSize, name: t.fileName, type: t.fileType, to: t.to};
       this.peers[fileInfo.to].peerObj.send( makeFileMeta(fileInfo) )
     } else if (t.to === this.myID){ // I'm the file receiver
-      console.log('receiving file now, wait for fileMeta');
+      //console.log('receiving file now, wait for fileMeta');
     } else {
       console.log('Oops, not supposed to happen')
     }
@@ -505,7 +505,7 @@ const writeFile = function(peer, data, chunkIdx, fileObj, isLastChunk, updatePro
 const doWriting = function(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) {
   writer.seek( chunkIdx * chunkSize);
   writer.onerror = function(err) {
-    console.log('Write failed: ' + err.toString());
+    //console.log('Write failed: ' + err.toString());
     emit('error/file', new FilerError({
       name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR", message: err.message || 'failed to write into ChromeFileSystem',
       peerID: peer._peerID, fileID: fileObj.fileID
