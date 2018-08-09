@@ -79,9 +79,15 @@ npm run start
 ```
 Open 2 Chrome tabs, go to `http://127.0.0.1:8000`, try to send files to each other.
 
-If you want to run this app in your local network, edit `example/public/javascripts/bundle.js`, search for `ws://127.0.0.1:8000`, change the IP address, then refresh the page.
+If you want to run this example app in your local network, edit `example/public/javascripts/bundle.js`, search for `ws://127.0.0.1:8000`, change the IP address, then refresh the page.
+You can also open `example/public/javascripts/src/demo.js` to know how it works, make some changes, then rebuild the JavaScript client code:
+```bash
+npm run build
+npm run start
+```
+
 This example app works pretty well in local network(small office, home), because the data go directly between two browsers, it's even faster than data copy using thumb-drive.
-You can open `example/public/javascripts/src/demo.js` to know how it works. Here is a running screenshot of this app:
+Here is a running screenshot of this app:
 
 ![running demo](https://media.worksphere.cn/repo/simple-filer/demo-640.gif)
 
