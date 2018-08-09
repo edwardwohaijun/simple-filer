@@ -8203,7 +8203,7 @@ filer.on('error/peer', function(err){
     case "ERR_PEER_ERROR": // the remote peer has closed the browser, lost network connection, stuff like that
       console.log('peer err: ', err.message); // if you are the file receiver, you have to ask file sender to re-establish P2P connection, and re-send the file.
       break;
-    case "ERR_PEER_CONNECTION_FAILED": // usually bad signaling data could cause this error, but this is less likely to happen
+    case "ERR_PEER_CONNECTION_FAILED": // failed to make P2P connection due to timeout(default is 12seconds, could be overridden by passing a timeout property to Filer constructor)
       console.log('peer connection error: ', err.message);
       break;
     default:
@@ -8213,18 +8213,17 @@ filer.on('error/peer', function(err){
 
 filer.on('error/file', function(err){
   switch (err.code) {
-    case "ERR_INVALID_PEERID": // occurred when P2P connection failed to establish in 20s(default value, could be overridden by passing a timeout property to Filer constructor)
-      console.log('invalid peerID', err.message); // You are supposed to take further actions on your own based on err.extraProps which has the following properties:
-      break; // array of {fileID, fileName, fileSize, fileType}. For example, use webSocket(or HTTP post) to upload the file to the server, then ask peer to download in the old-fashioned way.
-      // ??????? re-phrase the above wording.
-    case "ERR_INVALID_FILE": // You are calling .send() method with an invalid file object
+    case "ERR_INVALID_PEERID": // you are calling filer.send() with an empty or null peerID
+      console.log('invalid peerID', err.message);
+      break;
+    case "ERR_INVALID_FILE": // You are calling filer.send() with an invalid file object
       console.log('InvalidFileObject: ', err.message);
       break;
-    case "ERR_UNKNOWN_MESSAGE_TYPE": // peerID argument is missing when .send() method is called
+    case "ERR_UNKNOWN_MESSAGE_TYPE": // probably due to one side is using a non-Chrome browser, but I have done some checking to prevent that, thus I don't think this error would occur
       console.log("unknown data type", err.message);
       break;
-    case "ERR_CHROME_FILESYSTEM_ERROR": // messageType in data channel is the first 8 bytes interpreted as integer. This is less likely to happen.
-      console.log("chrome FS error: ", err.message); // But if you are using FireFox/Opera, it could.
+    case "ERR_CHROME_FILESYSTEM_ERROR": // probably due to that you have exceeded your filesystem quota(your hard disk is almost full), or you are clearing browser cache during file receiving
+      console.log("chrome FS error: ", err.message);
       break;
     default:
     console.log('unknown file error: ', err)
@@ -8256,13 +8255,6 @@ $("#taskList").on('click', '.removeTask', function(e){
   filer.removeTask( $(e.target).data('fileid') )
 });
 
-/*
-https://developer.chrome.com/apps/offline_storage
-Chrome FileSystem API support 2 types of storage: persistent and temporary, I use temporary in this project.
-Because it doesn't need to ask users for permission to create the filesystem.
-The following function check the quota granted by filesystem API, you need to make sure the size of all file-to-be-received is within the quota
-I will emit a 'error' if the quota is exceeded.
- */
 function checkQuota(){
   if (!filer.isFileSystemAPIsupported) {
     $("#fileSystemQuota").text("Your browser doesn't support Filesystem API, please use Chrome.");
@@ -8272,7 +8264,7 @@ function checkQuota(){
   filer.FileSystemQuota()
       .then(function({usedBytes, grantedBytes}){
         var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
-        var div2Content = "<div>Please make sure total size of received files doesn't exceed the total quota.)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.)</div>";
         $("#fileSystemQuota").html(div1Content + div2Content);
       })
       .catch(err => console.log("err checking quota: ", err));
