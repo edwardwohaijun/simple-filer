@@ -22,6 +22,9 @@ filer.on('status', function({fileID, status}){
 
 filer.on('error/peer', function(err){
   switch (err.code){
+    case "ERR_PEER_CLOSED":
+      console.log("connection with peer ID ", err.peerID, " closed");
+      break;
     case "ERR_PEER_ERROR": // the remote peer has closed the browser, lost network connection, stuff like that
       console.log('peer err: ', err.message); // if you are the file receiver, you have to ask file sender to re-establish P2P connection, and re-send the file.
       break;
@@ -69,6 +72,17 @@ if (!filer.isFileSystemAPIsupported) {
   $("#startTransfer").attr("disabled", "disabled");
 }
 
+$("#remove-all-files").click(function(){
+  filer.removeAllFiles()
+      .then(filer.FileSystemQuota)
+      .then(function({usedBytes, grantedBytes}){
+        var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.</div>";
+        $("#fileSystemQuota").html(div1Content + div2Content);
+      })
+      .catch(() => console.log("failed to remove some files"))
+});
+
 $("#peerListContainer").on('change', 'input:radio[name="peerList"]', function(){
   selectedPeerID = $(this).val();
 });
@@ -86,7 +100,7 @@ function checkQuota(){
   filer.FileSystemQuota()
       .then(function({usedBytes, grantedBytes}){
         var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
-        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.</div>";
         $("#fileSystemQuota").html(div1Content + div2Content);
       })
       .catch(err => console.log("err checking quota: ", err));
