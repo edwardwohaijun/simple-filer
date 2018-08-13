@@ -20,9 +20,17 @@ Filer.prototype.peers = {}; // should be renamed to _peers
 Filer.prototype.tasks = []; // ditto
 
 Filer.prototype.FileSystemQuota = function(){
-    if (!this.isFileSystemAPIsupported) {
-      return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
-    }
+  /*
+  // FileSystemQuota might get passed as success callback in .then() in promise chain, "this" will be interpreted as "undefined" or "window" in this context.
+  // thus, can't use the following:
+  if (!this.isFileSystemAPIsupported) {
+    return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
+  }
+  // https://stackoverflow.com/questions/41726181/promise-then-execution-context-when-using-class-methods-as-callback
+  */
+  if (!window.requestFileSystem) {
+        return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
+  }
 
   return new Promise(function(resolve, reject){
     navigator.webkitTemporaryStorage.queryUsageAndQuota (
@@ -39,8 +47,35 @@ Filer.prototype.FileSystemQuota = function(){
   });
 };
 
-Filer.prototype.removeAllFiles = function(){
-// next time, baby
+Filer.prototype.removeAllFiles = function(){ // it's easier to implement this function, if all files are saved in a pre-defined directory, then recursively remove it
+  return new Promise(function(resolve, reject){
+    fs(null) // fs function needs a fileObj, returns a promise, resolving to {rootFS, fileObj}, I just need the rootFS, thus passing a null
+      .then(function({root:root}){
+        let entries = [];
+        let dirReader = root.createReader();
+          dirReader.readEntries(function(results) { // Call readEntries() until no more results are returned.
+            for (var i = 0; i < results.length; i++){
+              let p = (function(i){ // "immediately-invoked-function" here is to prevent all iteration have the same "i" value
+                return new Promise(function(resolve, reject){
+                  results[i].remove(function(){ // todo: if isDir, remove it recursively
+                    resolve("entry removed");
+                  }, function(err){
+                    console.log("err removing entry: ", err, ", but continue the next removal");
+                    resolve("entry not removed") // failure to remove one file should NOT break the whole promise chain
+                  })
+                })
+              })(i);
+              entries.push(p);
+            }
+            Promise.all(entries)
+                .then(function(){resolve("all removed")})
+                .catch(function(err){reject("failed to remove all files")})
+          });
+      })
+      .catch(function(err){
+        reject("err removing all files: ", err)
+      });
+  });
 };
 
 Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
@@ -76,7 +111,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
   }.bind(this));
 
   p.on('close', function(){ // todo: close and error evt handler need to destroy all localBuffer, partly saved chunk and all other bookkeeping data...
-    this.emit('close', p._peerID);
+    this.emit('error/peer', new FilerError({name: 'PeerError', code: "ERR_PEER_CLOSED", message: "connection with peerID: " + p._peerID + " closed", peerID: p._peerID}))
   // ..., call removeTask() repeatedly to remove all associated data
   }.bind(this));
 
@@ -97,8 +132,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
 };
 
 // createConnection is a wrapper of _createPeerConnection function. Sometimes, you want to create peer connection before attempting to send a file.
-// This function returns a peer object, you can listen on its "connect" event to check whether P2P connection has established.
-// 怎样说明: A, B的连接, 只需执行createConnection一次, 仅一次, 多次反而出错
+// This function returns a peer object, but you don't need it. You just listen on "connect" and "error/peer" events to check whether P2P connection has established.
 Filer.prototype.createConnection = function(peerID){
   return this._createPeerConnection(this.myID, peerID, true, this.signalingChannel);
 };
@@ -529,7 +563,6 @@ const doWriting = function(writer, fileObj, peer, chunkIdx, data, isLastChunk, u
 };
 
 // ------------------------- Chrome filesystem API(Promise wrapper)
-
 const fs = function(fileObj) {
   return new Promise(function (resolve, reject) {
     window.requestFileSystem(window.TEMPORARY, 4*1024*1024*1024,
