@@ -6163,9 +6163,17 @@ Filer.prototype.peers = {}; // should be renamed to _peers
 Filer.prototype.tasks = []; // ditto
 
 Filer.prototype.FileSystemQuota = function(){
-    if (!this.isFileSystemAPIsupported) {
-      return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
-    }
+  /*
+  // FileSystemQuota might get passed as success callback in .then() in promise chain, "this" will be interpreted as "undefined" or "window" in this context.
+  // thus, can't use the following:
+  if (!this.isFileSystemAPIsupported) {
+    return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
+  }
+  // https://stackoverflow.com/questions/41726181/promise-then-execution-context-when-using-class-methods-as-callback
+  */
+  if (!window.requestFileSystem) {
+        return Promise.reject("your browser doesn't support FileSystem API, please use Chrome")
+  }
 
   return new Promise(function(resolve, reject){
     navigator.webkitTemporaryStorage.queryUsageAndQuota (
@@ -6182,8 +6190,35 @@ Filer.prototype.FileSystemQuota = function(){
   });
 };
 
-Filer.prototype.removeAllFiles = function(){
-// next time, baby
+Filer.prototype.removeAllFiles = function(){ // it's easier to implement this function, if all files are saved in a pre-defined directory, then recursively remove it
+  return new Promise(function(resolve, reject){
+    fs(null) // fs function needs a fileObj, returns a promise, resolving to {rootFS, fileObj}, I just need the rootFS, thus passing a null
+      .then(function({root:root}){
+        let entries = [];
+        let dirReader = root.createReader();
+          dirReader.readEntries(function(results) { // Call readEntries() until no more results are returned.
+            for (var i = 0; i < results.length; i++){
+              let p = (function(i){ // "immediately-invoked-function" here is to prevent all iteration have the same "i" value
+                return new Promise(function(resolve, reject){
+                  results[i].remove(function(){ // todo: if isDir, remove it recursively
+                    resolve("entry removed");
+                  }, function(err){
+                    console.log("err removing entry: ", err, ", but continue the next removal");
+                    resolve("entry not removed") // failure to remove one file should NOT break the whole promise chain
+                  })
+                })
+              })(i);
+              entries.push(p);
+            }
+            Promise.all(entries)
+                .then(function(){resolve("all removed")})
+                .catch(function(err){reject("failed to remove all files")})
+          });
+      })
+      .catch(function(err){
+        reject("err removing all files: ", err)
+      });
+  });
 };
 
 Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiator, signalingChannel) { // todo: use object as the only argument, rather than list of arguments
@@ -6219,7 +6254,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
   }.bind(this));
 
   p.on('close', function(){ // todo: close and error evt handler need to destroy all localBuffer, partly saved chunk and all other bookkeeping data...
-    this.emit('close', p._peerID);
+    this.emit('error/peer', new FilerError({name: 'PeerError', code: "ERR_PEER_CLOSED", message: "connection with peerID: " + p._peerID + " closed", peerID: p._peerID}))
   // ..., call removeTask() repeatedly to remove all associated data
   }.bind(this));
 
@@ -6240,8 +6275,7 @@ Filer.prototype._createPeerConnection = function (offerUID, answerUID, isInitiat
 };
 
 // createConnection is a wrapper of _createPeerConnection function. Sometimes, you want to create peer connection before attempting to send a file.
-// This function returns a peer object, you can listen on its "connect" event to check whether P2P connection has established.
-// 怎样说明: A, B的连接, 只需执行createConnection一次, 仅一次, 多次反而出错
+// This function returns a peer object, but you don't need it. You just listen on "connect" and "error/peer" events to check whether P2P connection has established.
 Filer.prototype.createConnection = function(peerID){
   return this._createPeerConnection(this.myID, peerID, true, this.signalingChannel);
 };
@@ -6288,9 +6322,9 @@ Filer.prototype.send = function(toWhom, fileObj){
   if (p && p.connected){
     this._runTask();
   } else if (p){
-    console.log('p exist, but not ready, just wait');
+    //console.log('p exist, but not ready, just wait');
   } else {
-    console.log('p does not exist, create it now');
+    //console.log('p does not exist, create it now');
     this._createPeerConnection(this.myID, toWhom, true, this.signalingChannel);
   }
 };
@@ -6346,7 +6380,7 @@ Filer.prototype._runTask = function(){
       var fileInfo = {id: t.fileID, size: t.fileSize, name: t.fileName, type: t.fileType, to: t.to};
       this.peers[fileInfo.to].peerObj.send( makeFileMeta(fileInfo) )
     } else if (t.to === this.myID){ // I'm the file receiver
-      console.log('receiving file now, wait for fileMeta');
+      //console.log('receiving file now, wait for fileMeta');
     } else {
       console.log('Oops, not supposed to happen')
     }
@@ -6648,7 +6682,7 @@ const writeFile = function(peer, data, chunkIdx, fileObj, isLastChunk, updatePro
 const doWriting = function(writer, fileObj, peer, chunkIdx, data, isLastChunk, updateProgress, emit) {
   writer.seek( chunkIdx * chunkSize);
   writer.onerror = function(err) {
-    console.log('Write failed: ' + err.toString());
+    //console.log('Write failed: ' + err.toString());
     emit('error/file', new FilerError({
       name: 'ChromeFileSystemError', code: "ERR_CHROME_FILESYSTEM_ERROR", message: err.message || 'failed to write into ChromeFileSystem',
       peerID: peer._peerID, fileID: fileObj.fileID
@@ -6672,7 +6706,6 @@ const doWriting = function(writer, fileObj, peer, chunkIdx, data, isLastChunk, u
 };
 
 // ------------------------- Chrome filesystem API(Promise wrapper)
-
 const fs = function(fileObj) {
   return new Promise(function (resolve, reject) {
     window.requestFileSystem(window.TEMPORARY, 4*1024*1024*1024,
@@ -6793,7 +6826,7 @@ EventEmitter.prototype.once = function (event, listener) {
 function FilerError({name, code, message, peerID, fileID}){
   // name should be the constructor function name(FilerError in this case), but I don't want to create one constructor for one error.
   this.name = name || 'UnknownError';
-  this.code = code;
+  this.code = code || 'ERR_UNKNOWN_ERROR';
   this.message = message || 'unknown error';
   this.peerID = peerID;
   this.fileID = fileID;
@@ -8200,6 +8233,9 @@ filer.on('status', function({fileID, status}){
 
 filer.on('error/peer', function(err){
   switch (err.code){
+    case "ERR_PEER_CLOSED":
+      console.log("connection with peer ID ", err.peerID, " closed");
+      break;
     case "ERR_PEER_ERROR": // the remote peer has closed the browser, lost network connection, stuff like that
       console.log('peer err: ', err.message); // if you are the file receiver, you have to ask file sender to re-establish P2P connection, and re-send the file.
       break;
@@ -8247,6 +8283,17 @@ if (!filer.isFileSystemAPIsupported) {
   $("#startTransfer").attr("disabled", "disabled");
 }
 
+$("#remove-all-files").click(function(){
+  filer.removeAllFiles()
+      .then(filer.FileSystemQuota)
+      .then(function({usedBytes, grantedBytes}){
+        var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.</div>";
+        $("#fileSystemQuota").html(div1Content + div2Content);
+      })
+      .catch(() => console.log("failed to remove some files"))
+});
+
 $("#peerListContainer").on('change', 'input:radio[name="peerList"]', function(){
   selectedPeerID = $(this).val();
 });
@@ -8264,7 +8311,7 @@ function checkQuota(){
   filer.FileSystemQuota()
       .then(function({usedBytes, grantedBytes}){
         var div1Content = "<div>Filesystem quota (used/total): " + getFileSize(usedBytes) + "/" + getFileSize(grantedBytes) + " (" + Math.floor(usedBytes/grantedBytes * 100) + "%)</div>";
-        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.)</div>";
+        var div2Content = "<div style='color: #757575; font-size: 12px;'>Please make sure total size of received files doesn't exceed the total quota.</div>";
         $("#fileSystemQuota").html(div1Content + div2Content);
       })
       .catch(err => console.log("err checking quota: ", err));
