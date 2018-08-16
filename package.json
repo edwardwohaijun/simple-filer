@@ -1,7 +1,7 @@
 {
   "name": "simple-filer",
   "description": "Simple web-based P2P file transfer library",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "author": {
     "name": "Edward Wo",
     "email": "edward.wo823@gmail.com",
@@ -28,7 +28,7 @@
     "url": "https://github.com/edwardwohaijun/simple-filer/issues"
   },
   "dependencies": {
-    "simple-peer": "^8.1.1"
+    "simple-peer": "^9.1.2"
   },
   "license": "MIT"
 }
