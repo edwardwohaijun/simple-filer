@@ -1,7 +1,7 @@
 {
   "name": "simple-filer",
   "description": "Simple web-based P2P file transfer library",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "author": {
     "name": "Edward Wo",
     "email": "edward.wo823@gmail.com",
