@@ -105,7 +105,7 @@ var filer = new Filer({myID: 123, signalingChannel: ws, webrtcConfig: configObje
 * `timeout`- (optional) is how long it'd take making P2P connection before giving up. 
 * `webrtcConfig`- (optional) passed to the underlying SimplePeer(an excellent WebRTC library) constructor. This argument should be like:
 ```
-{iceServers: [{url: 'stun:stun.l.google.com:19302'}, {url: 'turn:SERVERIP:PORT', credential: 'secret', username: 'username'}, ...]}
+{iceServers: [{urls: 'stun:stun.l.google.com:19302'}, {urls: 'turn:SERVERIP:PORT', credential: 'secret', username: 'username'}, ...]}
 ```
 SimplePeer already provides a default value for this argument, so you don't need one. 
 
