@@ -89,7 +89,7 @@ npm run start
 This example app works pretty well in local network(small office, home), because the data go directly between two browsers, it's even faster than data copy using thumb-drive.
 Here is a running screenshot of this app:
 
-![running demo](https://media.worksphere.cn/repo/simple-filer/demo-640.gif)
+![running demo](/demo-640.gif?raw=true "running demo")
 
 
 ## API
@@ -276,9 +276,9 @@ So, file senders need to run a loop of 32 iterations at most to send the whole c
 
 Let's say Alice want to send a bigger file to Bob. After their P2P connection has been established. The whole process can be illustrated in the following 2 diagrams:
 
-![workflow of message exchange](https://media.worksphere.cn/repo/simple-filer/msgExchange.png)
+![workflow of message exchange](/msgExchange.png?raw=true "message exchange")
 
-![how chunk is sent/received](https://media.worksphere.cn/repo/simple-filer/HowChunkSentReceived.png?version=2)
+![how chunk is sent/received](/HowChunkSentReceived.png?raw=true "how chunk is sent/received")
 
 Alice first send a meta data to Bob, containing information like: fileID(randomly generated string), fileName, fileSize, fileType.
 After receiving the meta data, Bob create a local write buffer with the same size of a chunk, then
